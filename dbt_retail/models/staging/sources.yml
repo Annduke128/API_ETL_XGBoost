@@ -1,0 +1,125 @@
+version: 2
+
+sources:
+  - name: retail_source
+    database: "{{ env_var('POSTGRES_DB', 'retail_db') }}"
+    schema: public
+    description: "Dữ liệu giao dịch bán lẻ gốc"
+    
+    tables:
+      - name: transactions
+        description: "Bảng giao dịch tổng hợp"
+        columns:
+          - name: id
+            description: "Khóa chính"
+            tests:
+              - unique
+              - not_null
+          
+          - name: ma_giao_dich
+            description: "Mã giao dịch"
+          
+          - name: chi_nhanh_id
+            description: "ID chi nhánh"
+            tests:
+              - relationships:
+                  to: source('retail_source', 'branches')
+                  field: id
+          
+          - name: thoi_gian
+            description: "Thờigian giao dịch"
+          
+          - name: tong_tien_hang
+            description: "Tổng tiền hàng"
+          
+          - name: giam_gia
+            description: "Giảm giá"
+          
+          - name: doanh_thu
+            description: "Doanh thu"
+          
+          - name: tong_gia_von
+            description: "Tổng giá vốn"
+          
+          - name: loi_nhuan_gop
+            description: "Lợi nhuận gộp"
+      
+      - name: transaction_details
+        description: "Chi tiết giao dịch theo sản phẩm"
+        columns:
+          - name: id
+            tests:
+              - unique
+              - not_null
+          
+          - name: giao_dich_id
+            tests:
+              - relationships:
+                  to: source('retail_source', 'transactions')
+                  field: id
+          
+          - name: product_id
+            tests:
+              - relationships:
+                  to: source('retail_source', 'products')
+                  field: id
+          
+          - name: so_luong
+            description: "Số lượng"
+          
+          - name: gia_ban
+            description: "Giá bán"
+          
+          - name: gia_von
+            description: "Giá vốn"
+          
+          - name: loi_nhuan
+            description: "Lợi nhuận"
+      
+      - name: products
+        description: "Danh mục sản phẩm"
+        columns:
+          - name: id
+            tests:
+              - unique
+              - not_null
+          
+          - name: ma_hang
+            description: "Mã hàng"
+            tests:
+              - unique
+              - not_null
+          
+          - name: ten_hang
+            description: "Tên hàng"
+          
+          - name: thuong_hieu
+            description: "Thương hiệu"
+          
+          - name: nhom_hang_cap_1
+            description: "Nhóm hàng cấp 1"
+          
+          - name: nhom_hang_cap_2
+            description: "Nhóm hàng cấp 2"
+          
+          - name: nhom_hang_cap_3
+            description: "Nhóm hàng cấp 3"
+      
+      - name: branches
+        description: "Danh sách chi nhánh"
+        columns:
+          - name: id
+            tests:
+              - unique
+              - not_null
+          
+          - name: ma_chi_nhanh
+            tests:
+              - unique
+              - not_null
+          
+          - name: ten_chi_nhanh
+          
+          - name: dia_chi
+          
+          - name: thanh_pho

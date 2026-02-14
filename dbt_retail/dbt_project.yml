@@ -1,0 +1,98 @@
+name: 'retail_analytics'
+version: '1.0.0'
+config-version: 2
+
+profile: 'retail_profile'
+
+dispatch:
+  - macro_namespace: dbt
+    search_order: ['dbt', 'retail_analytics']
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+vars:
+  # Biến cho ngành bán lẻ
+  min_date: '2020-01-01'
+  currency: 'VND'
+  
+  # Ngưỡng phân loại
+  high_value_threshold: 1000000  # 1 triệu VND
+  
+  # Phân loại ABC
+  abc_a_threshold: 0.8  # Top 80% doanh thu
+  abc_b_threshold: 0.95  # 80-95% doanh thu
+  
+  # Phân loại RFM
+  rfm_recency_high: 7
+  rfm_recency_medium: 30
+  rfm_frequency_high: 10
+  rfm_monetary_high: 5000000
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  retail_analytics:
+    +materialized: view
+    +persist_docs:
+      relation: true
+      columns: true
+    
+    staging:
+      +materialized: view
+      +schema: staging
+      +tags: ['staging', 'daily']
+    
+    intermediate:
+      +materialized: ephemeral
+      +schema: intermediate
+      +tags: ['intermediate']
+    
+    marts:
+      +materialized: table
+      +schema: marts
+      +tags: ['marts', 'daily']
+      
+      core:
+        +tags: ['core']
+      
+      sales:
+        +tags: ['sales']
+      
+      inventory:
+        +tags: ['inventory']
+      
+      customers:
+        +tags: ['customers']
+      
+      marketing:
+        +tags: ['marketing']
+
+seeds:
+  retail_analytics:
+    +schema: seeds
+    +tags: ['reference']
+    
+    product:
+      +column_types:
+        ma_hang: varchar(50)
+        ma_vach: varchar(100)
+        ten_hang: varchar(500)
+        thuong_hieu: varchar(200)
+        nhom_hang_cap_1: varchar(200)
+        nhom_hang_cap_2: varchar(200)
+        nhom_hang_cap_3: varchar(200)
+        gia_von_mac_dinh: numeric(15,2)
+        gia_ban_mac_dinh: numeric(15,2)
+
+snapshots:
+  retail_analytics:
+    +target_schema: snapshots
+    +tags: ['scd']

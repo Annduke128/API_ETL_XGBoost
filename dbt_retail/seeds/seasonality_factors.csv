@@ -1,0 +1,13 @@
+month,season,seasonality_factor,peak_reason
+1,Winter,0.85,Tết Nguyên Đán
+2,Winter,0.75,Sau Tết
+3,Spring,1.00,Mùa xuân
+4,Spring,1.05,Giỗ Tổ
+5,Spring,1.10,Mùa cưới
+6,Summer,1.15,Mùa hè
+7,Summer,1.20,Cao điểm hè
+8,Summer,1.10,Back to school
+9,Autumn,1.05,Thu sang
+10,Autumn,1.15,Cuối năm
+11,Autumn,1.25,Black Friday
+12,Winter,1.30,Giáng sinh và năm mới

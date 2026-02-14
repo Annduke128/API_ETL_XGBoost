@@ -1,0 +1,156 @@
+# ============================================================
+# CẤU HÌNH EMAIL NOTIFIER CHO ML PIPELINE - TEMPLATE
+# ============================================================
+# Đây là file template. Copy thành email_config.yaml và chỉnh sửa.
+# 
+# ⚠️ QUAN TRỌNG: KHÔNG commit email_config.yaml lên Git!
+# File email_config.yaml đã được thêm vào .gitignore
+# ============================================================
+
+# -------------------------------------------------
+# DANH SÁCH NGƯỜI NHẬN BÁO CÁO THEO LOẠI
+# -------------------------------------------------
+# 
+# 📧 CẤU HÌNH PHÂN QUYỀN:
+# Mỗi loại báo cáo có thể gửi đến danh sách email riêng
+# 
+# training_report: Ngườ i nhận báo cáo kết quả huấn luyện model
+# forecast_report: Ngườ i nhận báo cáo dự báo & khuyến nghị tồn kho  
+# error_alert:     Ngườ i nhận thông báo khi có lỗi
+#
+# 💡 Ví dụ:
+#   - Data Scientist → training_report (xem model performance)
+#   - Sales Manager  → forecast_report (xem dự báo doanh số)
+#   - IT Admin       → error_alert (xử lý lỗi hệ thống)
+# -------------------------------------------------
+
+recipients:
+  # ==========================================
+  # PHÂN QUYỀN THEO LOẠI BÁO CÁO
+  # ==========================================
+  by_report_type:
+    
+    # 📊 TRAINING REPORT - Kết quả huấn luyện model
+    # Ngườ i nhận: Data Scientist, ML Engineer, Tech Lead
+    # Nội dung: Model metrics, hyperparameters, feature importance
+    training_report:
+      - "your-email@company.com"  # ← Thay bằng email thật
+      # - "ml-engineer@company.com"
+      # - "tech-lead@company.com"
+    
+    # 🔮 FORECAST REPORT - Dự báo & Tồn kho
+    # Ngườ i nhận: Sales Manager, Inventory Team, Business Owner
+    # Nội dung: Dự báo doanh số, xu hướng sản phẩm, khuyến nghị tồn kho
+    forecast_report:
+      - "sales-manager@company.com"  # ← Thay bằng email thật
+      # - "inventory@company.com"
+      # - "ceo@company.com"
+    
+    # ⚠️ ERROR ALERT - Thông báo lỗi
+    # Ngườ i nhận: DevOps, IT Admin, Data Engineer
+    # Nội dung: Chi tiết lỗi, stack trace, ngữ cảnh
+    error_alert:
+      - "devops@company.com"  # ← Thay bằng email thật
+      # - "it-admin@company.com"
+
+# -------------------------------------------------
+# CẤU HÌNH LOẠI BÁO CÁO
+# -------------------------------------------------
+# Bật/tắt từng loại thông báo và tùy chỉnh tiêu đề
+
+notifications:
+  # ==========================================
+  # TRAINING REPORT
+  # ==========================================
+  # Gửi sau mỗi lần training hoàn tất
+  # Cho biết: Model có hoạt động tốt không? Cần điều chỉnh gì?
+  #
+  training_report:
+    enabled: true
+    subject_prefix: "[ML Training] Kết quả huấn luyện"
+    
+  # ==========================================
+  # FORECAST REPORT
+  # ==========================================
+  # Gửi sau khi generate forecasts
+  # Cho biết: Xu hướng bán hàng, sản phẩm hot, cảnh báo tồn kho
+  #
+  forecast_report:
+    enabled: true
+    subject_prefix: "[ML Forecast] Báo cáo dự báo & Tồn kho"
+    
+  # ==========================================
+  # ERROR ALERT
+  # ==========================================
+  # Gửi khi có lỗi xảy ra trong pipeline
+  # Cho biết: Có vấn đề gì cần xử lý ngay
+  #
+  error_alert:
+    enabled: true
+    subject_prefix: "[ML Pipeline] CẢNH BÁO LỖI"
+
+# -------------------------------------------------
+# CẤU HÌNH NỘI DUNG BÁO CÁO
+# -------------------------------------------------
+
+content:
+  # Số sản phẩm xu hướng hàng đầu hiển thị trong báo cáo
+  top_trending_products: 10
+  
+  # Số sản phẩm cần chú ý tồn kho
+  top_inventory_alerts: 10
+  
+  # Định dạng ngày tháng
+  date_format: "%d/%m/%Y %H:%M"
+  
+  # Múi giờ
+  timezone: "Asia/Ho_Chi_Minh"
+  
+  # Ngôn ngữ báo cáo (vi/en)
+  language: "vi"
+
+# -------------------------------------------------
+# CẤU HÌNH GỬI EMAIL (SMTP)
+# -------------------------------------------------
+# ⚠️ LƯU Ý BẢO MẬT:
+# - Không lưu password trực tiếp trong file này
+# - Sử dụng biến môi trường hoặc App Password trong .env
+# 
+# Để sử dụng Gmail:
+# 1. Bật 2-Factor Authentication
+# 2. Tạo App Password tại: https://myaccount.google.com/apppasswords
+# 3. Copy App Password vào biến môi trường EMAIL_PASSWORD trong file .env
+
+smtp:
+  # Server SMTP (Gmail)
+  server: "smtp.gmail.com"
+  port: 587
+  use_tls: true
+  
+  # Tài khoản gửi email
+  # Nên sử dụng email riêng cho hệ thống (ví dụ: ml-pipeline@company.com)
+  # Có thể dùng biến môi trường: ${EMAIL_SENDER:-default@company.com}
+  sender_email: "${EMAIL_SENDER:-ml-pipeline@company.com}"
+  
+  # Tên ngườ i gửi hiển thị trong email
+  sender_name: "ML Pipeline System"
+
+# -------------------------------------------------
+# CẤU HÌNH NÂNG CAO
+# -------------------------------------------------
+
+advanced:
+  # Thờ i gian chờ kết nối SMTP (giây)
+  timeout: 30
+  
+  # Số lần thử lại khi gửi thất bại
+  retry_attempts: 3
+  
+  # Thờ i gian chờ giữa các lần thử lại (giây)
+  retry_delay: 5
+  
+  # Đính kèm file metrics.json trong email training
+  attach_metrics_file: true
+  
+  # Đính kèm file forecasts.csv trong email forecast
+  attach_forecasts_file: true

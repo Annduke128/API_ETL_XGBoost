@@ -1,0 +1,54 @@
+version: 2
+
+models:
+  - name: stg_transactions
+    description: "Staging model cho giao dịch"
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: revenue
+        tests:
+          - not_null
+      - name: gross_profit
+        tests:
+          - not_null
+
+  - name: stg_transaction_details
+    description: "Staging model cho chi tiết giao dịch"
+    columns:
+      - name: detail_id
+        tests:
+          - unique
+          - not_null
+      - name: quantity
+        tests:
+          - not_null
+      - name: selling_price
+        tests:
+          - not_null
+
+  - name: stg_products
+    description: "Staging model cho sản phẩm"
+    columns:
+      - name: product_id
+        tests:
+          - unique
+          - not_null
+      - name: product_code
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_branches
+    description: "Staging model cho chi nhánh"
+    columns:
+      - name: branch_id
+        tests:
+          - unique
+          - not_null
+      - name: branch_code
+        tests:
+          - unique
+          - not_null

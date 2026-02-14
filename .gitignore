@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Data files
+csv_input/*.csv
+!csv_input/sample_data.csv
+csv_output/
+csv_processed/
+*.csv.bak
+
+# Models
+models/*.pkl
+models/*.joblib
+
+# DBT
+target/
+dbt_packages/
+logs/
+.user.yml
+
+# Airflow
+airflow/logs/
+airflow/*.pid
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Email config (contains personal emails)
+ml_pipeline/email_config.yaml
+!ml_pipeline/email_config.example.yaml
+
+# Docker
+*.log

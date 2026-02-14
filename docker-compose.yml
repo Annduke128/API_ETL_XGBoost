@@ -1,0 +1,355 @@
+services:
+  # ============================================
+  # Redis - Buffer & Cache
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: retail_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - retail_network
+
+  # ============================================
+  # PostgreSQL - OLTP Database
+  # ============================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: retail_postgres
+    environment:
+      POSTGRES_USER: retail_user
+      POSTGRES_PASSWORD: retail_password
+      POSTGRES_DB: retail_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init/postgres:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U retail_user -d retail_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - retail_network
+
+  # ============================================
+  # ClickHouse - Data Warehouse
+  # ============================================
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    container_name: retail_clickhouse
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse_password
+      CLICKHOUSE_DB: retail_dw
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # Native
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./init/clickhouse:/docker-entrypoint-initdb.d
+      - ./init/clickhouse/custom_config.xml:/etc/clickhouse-server/config.d/custom.xml:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    cap_add:
+      - SYS_NICE
+      - NET_ADMIN
+    privileged: true
+    sysctls:
+      - net.ipv4.ip_local_port_range=55000 65535
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - retail_network
+
+  # ============================================
+  # DBT - Data Transformation
+  # ============================================
+  dbt:
+    image: ghcr.io/dbt-labs/dbt-postgres:1.7.0
+    container_name: retail_dbt
+    environment:
+      DBT_PROFILES_DIR: /root/.dbt
+    volumes:
+      - ./dbt_retail:/usr/app/dbt
+      - ./dbt_retail/profiles.yml:/root/.dbt/profiles.yml
+    working_dir: /usr/app/dbt
+    command: ["run", "--profiles-dir", "/root/.dbt"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - retail_network
+
+  # ============================================
+  # Airflow - Scheduler
+  # ============================================
+  airflow-postgres:
+    image: postgres:15-alpine
+    container_name: retail_airflow_db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    networks:
+      - retail_network
+
+  airflow-init:
+    image: apache/airflow:2.8.0
+    container_name: retail_airflow_init
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - airflow_logs:/opt/airflow/logs
+    entrypoint: ["/bin/bash", "-c", "airflow db init && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true"]
+    depends_on:
+      - airflow-postgres
+    networks:
+      - retail_network
+
+  airflow-webserver:
+    image: apache/airflow:2.8.0
+    container_name: retail_airflow_webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - airflow_logs:/opt/airflow/logs
+    ports:
+      - "8085:8080"
+    command: webserver
+    depends_on:
+      - airflow-init
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - retail_network
+
+  airflow-scheduler:
+    image: apache/airflow:2.8.0
+    container_name: retail_airflow_scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - airflow_logs:/opt/airflow/logs
+    command: scheduler
+    depends_on:
+      - airflow-init
+    networks:
+      - retail_network
+
+  # ============================================
+  # Superset - BI Dashboard
+  # ============================================
+  superset-db:
+    image: postgres:15-alpine
+    container_name: retail_superset_db
+    environment:
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: superset
+      POSTGRES_DB: superset
+    volumes:
+      - superset_db_data:/var/lib/postgresql/data
+    networks:
+      - retail_network
+
+  superset-cache:
+    image: redis:7-alpine
+    container_name: retail_superset_cache
+    networks:
+      - retail_network
+
+  superset-init:
+    image: apache/superset:2.1.0
+    container_name: retail_superset_init
+    environment:
+      SUPERSET_SECRET_KEY: 'thisisasecretkeyforretailsuperset123'
+      DATABASE_DB: superset
+      DATABASE_HOST: superset-db
+      DATABASE_PASSWORD: superset
+      DATABASE_USER: superset
+      DATABASE_PORT: 5432
+      DATABASE_DIALECT: postgresql
+      REDIS_HOST: superset-cache
+      REDIS_PORT: 6379
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py
+    entrypoint: ["/bin/bash", "-c", "superset db upgrade && superset fab create-admin --username admin --firstname Superset --lastname Admin --email admin@superset.com --password admin || true && superset init"]
+    depends_on:
+      - superset-db
+    networks:
+      - retail_network
+
+  superset-web:
+    image: apache/superset:2.1.0
+    container_name: retail_superset
+    environment:
+      SUPERSET_SECRET_KEY: 'thisisasecretkeyforretailsuperset123'
+      DATABASE_DB: superset
+      DATABASE_HOST: superset-db
+      DATABASE_PASSWORD: superset
+      DATABASE_USER: superset
+      DATABASE_PORT: 5432
+      DATABASE_DIALECT: postgresql
+      REDIS_HOST: superset-cache
+      REDIS_PORT: 6379
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py
+      - ./superset/docker-bootstrap.sh:/app/docker-bootstrap.sh
+      - superset_data:/app/superset_home
+    command: ["/bin/bash", "/app/docker-bootstrap.sh"]
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    depends_on:
+      - superset-init
+      - clickhouse
+    networks:
+      - retail_network
+
+  # ClickHouse connection setup
+  superset-clickhouse-init:
+    image: apache/superset:2.1.0
+    container_name: retail_superset_ch_init
+    environment:
+      SUPERSET_SECRET_KEY: 'thisisasecretkeyforretailsuperset123'
+      DATABASE_DB: superset
+      DATABASE_HOST: superset-db
+      DATABASE_PASSWORD: superset
+      DATABASE_USER: superset
+      DATABASE_PORT: 5432
+      DATABASE_DIALECT: postgresql
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse_password
+      CLICKHOUSE_DB: retail_dw
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py
+      - ./superset/create_clickhouse_conn.py:/app/create_clickhouse_conn.py
+      - superset_data:/app/superset_home
+    entrypoint: ["/bin/bash", "-c", "pip install clickhouse-connect==0.7.19 -q && python /app/create_clickhouse_conn.py"]
+    depends_on:
+      - superset-web
+      - clickhouse
+    networks:
+      - retail_network
+    profiles:
+      - init
+
+  # ============================================
+  # ML Pipeline Service
+  # ============================================
+  ml-pipeline:
+    build:
+      context: ./ml_pipeline
+      dockerfile: Dockerfile
+    container_name: retail_ml_pipeline
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: retail_db
+      POSTGRES_USER: retail_user
+      POSTGRES_PASSWORD: retail_password
+      CLICKHOUSE_HOST: clickhouse
+      REDIS_HOST: redis
+      # Email Configuration - Lấy từ .env file
+      EMAIL_SENDER: ${EMAIL_SENDER:-ml-pipeline@company.com}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      # Optional: Có thể định nghĩa recipients qua biến môi trường (ngăn cách bằng dấu phẩy)
+      # EMAIL_TRAINING_REPORT: ${EMAIL_TRAINING_REPORT:-}
+      # EMAIL_FORECAST_REPORT: ${EMAIL_FORECAST_REPORT:-}
+      # EMAIL_ERROR_ALERT: ${EMAIL_ERROR_ALERT:-}
+    volumes:
+      - ./ml_pipeline:/app
+      - ml_models:/app/models
+    depends_on:
+      - postgres
+      - clickhouse
+      - redis
+    networks:
+      - retail_network
+    profiles:
+      - ml
+
+  # ============================================
+  # File Watcher - Auto process CSV
+  # ============================================
+  csv-watcher:
+    build:
+      context: ./data_cleaning
+      dockerfile: Dockerfile
+    container_name: retail_csv_watcher
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      CLICKHOUSE_HOST: clickhouse
+      WATCH_DIR: /csv_input
+    volumes:
+      - ./csv_input:/csv_input
+      - ./csv_output:/csv_output
+    depends_on:
+      - redis
+      - postgres
+      - clickhouse
+    networks:
+      - retail_network
+    profiles:
+      - watcher
+    # Override default to run one-time instead of continuous
+    # command: ["python", "auto_process_csv.py", "--input", "/csv_input", "--output", "/csv_output"]
+
+volumes:
+  redis_data:
+  postgres_data:
+  clickhouse_data:
+  airflow_db_data:
+  airflow_logs:
+  superset_db_data:
+  superset_data:
+  ml_models:
+
+networks:
+  retail_network:
+    driver: bridge
