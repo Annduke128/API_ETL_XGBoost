@@ -725,15 +725,16 @@ class SalesForecaster:
                     pred_features = features[features['ngay'] == date]
                     
                     if len(pred_features) > 0 and 'product_quantity' in self.models:
-                        # Lấy features có sẵn, fill missing bằng 0
-                        available_cols = [c for c in self.feature_cols if c in pred_features.columns]
-                        X_pred = pred_features[available_cols].fillna(0)
+                        # Lấy feature names từ model đã train
+                        model_features = self.models['product_quantity'].feature_names_in_
                         
-                        # Thêm missing columns với giá trị 0
-                        for col in self.feature_cols:
-                            if col not in X_pred.columns:
-                                X_pred[col] = 0
-                        X_pred = X_pred[self.feature_cols]
+                        # Tạo DataFrame với đúng features
+                        X_pred = pd.DataFrame(0, index=[0], columns=model_features)
+                        
+                        # Fill giá trị từ pred_features nếu có
+                        for col in model_features:
+                            if col in pred_features.columns:
+                                X_pred[col] = pred_features[col].fillna(0).values
                         
                         quantity_pred = self.models['product_quantity'].predict(X_pred)[0]
                         revenue_pred = self.models['product_revenue'].predict(X_pred)[0]
