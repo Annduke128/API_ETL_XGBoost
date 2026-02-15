@@ -192,36 +192,30 @@ curl -I http://localhost:8088/login
 
 ## 📁 Import dữ liệu CSV
 
-### Cách 1: Tự động (Khuyến nghị)
+### Tự động (Airflow Schedule)
+
+Hệ thống tự động import CSV **hàng ngày lúc 2h sáng** thông qua Airflow DAG `csv_daily_import`:
+
+```
+02:00 AM Daily
+    ├── Quét file CSV trong csv_input/
+    ├── Làm sạch & Import vào PostgreSQL + ClickHouse
+    └── Chạy DBT Transform
+```
+
+### Import thủ công (Manual)
+
+Nếu cần import ngay lập tức:
 
 ```bash
 # Copy file CSV vào thư mục
 cp /path/to/your/file.csv csv_input/
 
-# Chạy processor
-./process_csv.sh
+# Chạy import (chỉ xử lý 1 lần)
+make csv-import
 
-# Hoặc dùng Make
-make process
-```
-
-### Cách 2: Chạy container riêng
-
-```bash
-docker-compose run --rm \
-  -v "$(pwd)/csv_input:/csv_input" \
-  -v "$(pwd)/csv_output:/csv_output" \
-  csv-watcher \
-  python auto_process_csv.py --input /csv_input --output /csv_output
-```
-
-### Cách 3: Chạy liên tục (Auto-watch)
-
-```bash
-# Khởi động watcher mode
-docker-compose --profile watcher up -d csv-watcher
-
-# Từ giờ, mỗi file CSV copy vào csv_input/ sẽ tự động xử lý
+# Hoặc import + chạy DBT transform
+make csv-process-full
 ```
 
 ### Kiểm tra kết quả import:
@@ -616,7 +610,23 @@ docker-compose exec redis redis-cli FLUSHDB
 docker-compose restart redis
 ```
 
-### Lỗi 5: Disk full
+### Lỗi 5: CSV Import không chạy
+
+```bash
+# Kiểm tra Airflow DAG có được schedule không
+curl http://localhost:8085/api/v1/dags/csv_daily_import/dagRuns
+
+# Chạy thủ công
+make csv-import
+
+# Kiểm tra file có trong thư mục không
+ls -la csv_input/
+
+# Kiểm tra logs
+docker-compose logs csv-watcher
+```
+
+### Lỗi 6: Disk full
 
 ```bash
 # Dọn dẹp Docker
@@ -638,6 +648,8 @@ make up                 # Khởi động tất cả services
 make down               # Dừng services
 make restart            # Restart
 make logs               # Xem logs
+make csv-import         # Import CSV thủ công
+make csv-process-full   # Import CSV + DBT transform
 make dbt                # Chạy DBT
 make ml                 # Train ML (Optuna 50 trials)
 make ml-train-fast      # Train ML nhanh (no tuning)
@@ -664,4 +676,4 @@ MIT License
 
 ---
 
-**Last Updated:** 2024-02-13
+**Last Updated:** 2024-02-14

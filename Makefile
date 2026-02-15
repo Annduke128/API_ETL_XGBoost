@@ -141,11 +141,14 @@ csv-import:
 		csv-watcher \
 		python auto_process_csv.py --input /csv_input --output /csv_output
 
-# Chạy auto-watch mode
-csv-watch:
-	@echo "👁️  Starting CSV watcher mode..."
-	@echo "Copy CSV files to csv_input/ to auto-process"
-	docker-compose --profile watcher up -d csv-watcher
+# Trigger CSV import manually (chạy 1 lần)
+csv-import:
+	@echo "📁 Processing CSV files..."
+	docker-compose --profile watcher run --rm csv-watcher python auto_process_csv.py
+
+# Chạy CSV import + DBT transform (giống Airflow DAG)
+csv-process-full: csv-import dbt
+	@echo "✅ CSV processing and DBT transform completed"
 
 # Xóa dữ liệu processed/error
 csv-reset:
