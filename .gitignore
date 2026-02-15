@@ -1,51 +1,221 @@
-# Python
+# ============================================================================
+# RETAIL DATA PIPELINE - GITIGNORE
+# ============================================================================
+
+# ============================================================================
+# PYTHON
+# ============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.dmypy.json
+
+# ============================================================================
+# VIRTUAL ENVIRONMENTS
+# ============================================================================
+.env
+.env.*
+!.env.example
+.venv
 env/
 venv/
 ENV/
+env.bak/
+venv.bak/
+Pipfile.lock
+poetry.lock
 
-# Data files
+# ============================================================================
+# DATA FILES (Không commit dữ liệu thô và kết quả)
+# ============================================================================
+# CSV input/output (dữ liệu lớn, không nên commit)
 csv_input/*.csv
-!csv_input/sample_data.csv
+csv_input/processed/
+csv_input/error/
 csv_output/
-csv_processed/
+!csv_input/.gitkeep
+!csv_output/.gitkeep
+
+# Data directories
+data/
 *.csv.bak
+*.xlsx
+*.xls
+*.parquet
+*.feather
+*.h5
+*.hdf5
 
-# Models
-models/*.pkl
-models/*.joblib
+# ============================================================================
+# ML MODELS (File lớn, tái tạo được)
+# ============================================================================
+ml_pipeline/models/*.pkl
+ml_pipeline/models/*.joblib
+ml_pipeline/models/*.h5
+ml_pipeline/models/*.onnx
+*.pkl
+*.joblib
+*.model
+*.weights
 
+# Optuna studies (có thể lớn)
+ml_pipeline/models/*_optuna_study.pkl
+
+# ============================================================================
 # DBT
-target/
-dbt_packages/
-logs/
-.user.yml
+# ============================================================================
+dbt_retail/target/
+dbt_retail/dbt_packages/
+dbt_retail/logs/
+dbt_retail/.user.yml
+dbt_retail/*.log
 
-# Airflow
+# ============================================================================
+# AIRFLOW
+# ============================================================================
 airflow/logs/
 airflow/*.pid
+airflow/*.err
+airflow/*.out
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/webserver_config.py
+airflow/standalone_admin_password.txt
 
-# IDE
+# ============================================================================
+# DOCKER
+# ============================================================================
+*.log
+.docker/
+docker-compose.override.yml
+
+# Database volumes (nếu có local mount)
+postgres_data/
+clickhouse_data/
+redis_data/
+mssql_data/
+
+# ============================================================================
+# IDE / EDITORS
+# ============================================================================
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings/
+*.tmproj
+*.esproj
 
+# ============================================================================
 # OS
+# ============================================================================
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# Environment
+# ============================================================================
+# ENVIRONMENT & CONFIG (Chứa thông tin nhạy cảm)
+# ============================================================================
+# Environment variables
 .env
 .env.local
+.env.*.local
 
-# Email config (contains personal emails)
+# Email config (chứa email cá nhân)
 ml_pipeline/email_config.yaml
 !ml_pipeline/email_config.example.yaml
 
-# Docker
-*.log
+# Database credentials
+config/database_credentials.yml
+config/secrets.yml
+
+# SSL/TLS certificates
+*.pem
+*.key
+*.crt
+
+# ============================================================================
+# TEMP & BACKUP FILES
+# ============================================================================
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+*.old
+*.save
+*.swp
+*~
+
+# ============================================================================
+# JUPYTER NOTEBOOK
+# ============================================================================
+.ipynb_checkpoints/
+*.ipynb
+
+# ============================================================================
+# TESTS
+# ============================================================================
+tests/__pycache__/
+tests/.pytest_cache/
+tests/coverage/
+
+# ============================================================================
+# DOCUMENTATION BUILD
+# ============================================================================
+site/
+docs/_build/
+docs/site/
+
+# ============================================================================
+# MISC
+# ============================================================================
+*.pid
+*.seed
+*.pid.lock
+
+# ============================================================================
+# PROJECT SPECIFIC
+# ============================================================================
+# Session summaries (chứa thông tin local)
+SESSION_SUMMARY.md
+
+# Temp processing files
+/tmp/
+temp/

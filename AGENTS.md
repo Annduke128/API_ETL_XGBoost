@@ -401,4 +401,45 @@ docker volume prune -f
 
 ---
 
-**Last Updated**: 2024-02-13
+---
+
+## 🔐 Bảo Mật & Git Workflow
+
+### .gitignore - Các File Được Bảo Vệ
+
+| File/Pattern | Lý do |
+|-------------|-------|
+| `.env` | Chứa password, API keys |
+| `csv_input/*.csv` | Dữ liệu thô, không commit |
+| `*.pkl`, `*.joblib` | ML models (lớn, tái tạo được) |
+| `ml_pipeline/email_config.yaml` | Email cá nhân |
+| `__pycache__/` | Python cache |
+| `dbt_retail/target/` | Build artifacts |
+
+### Push Code Lên GitHub
+
+```bash
+# 1. Kiểm tra file thay đổi
+git status
+
+# 2. Xem chi tiết thay đổi
+git diff
+
+# 3. Add file (tự động ignore file trong .gitignore)
+git add .
+
+# 4. Kiểm tra lại trước khi commit
+git diff --cached --name-only
+
+# 5. Commit
+git commit -m "feat: Mô tả thay đổi"
+
+# 6. Push (cần cấu hình token/SSH)
+git push origin main
+```
+
+Xem chi tiết trong `GIT_COMMIT_GUIDE.md`
+
+---
+
+**Last Updated**: 2024-02-14

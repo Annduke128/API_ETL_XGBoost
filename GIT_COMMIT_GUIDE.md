@@ -1,53 +1,61 @@
-# Hướng Dẫn Commit Lên GitHub - Bảo Mật
+# Hướng Dẫn Push Dự Án Lên GitHub
 
-> Hướng dẫn này giúp bạn commit code lên GitHub mà **KHÔNG** làm lộ thông tin cá nhân.
+> Hướng dẫn từng bước để push Retail Data Pipeline lên GitHub an toàn, không làm lộ thông tin nhạy cảm.
 
-## ⚠️ DANH SÁCH FILE KHÔNG ĐƯỢC COMMIT
+---
 
-Các file sau chứa thông tin nhạy cảm và đã được thêm vào `.gitignore`:
+## 📋 Danh Sách File Được Bảo Vệ (Đã có trong .gitignore)
 
-- ❌ `.env` - Chứa password, API keys
-- ❌ `ml_pipeline/email_config.yaml` - Chứa email cá nhân
-- ❌ `*.pkl`, `*.joblib` - Model files (lớn + nhạy cảm)
-- ❌ `csv_input/*.csv` - Dữ liệu thô
-- ❌ `__pycache__/` - Cache Python
+Các file sau **sẽ tự động bị ignore** khi commit:
 
-## 🚀 CÁCH COMMIT (TỪNG BƯỚC)
+| Loại | File/Thư mục | Lý do |
+|------|-------------|-------|
+| **Environment** | `.env`, `.env.local` | Chứa password, API keys |
+| **Data** | `csv_input/*.csv`, `csv_output/` | Dữ liệu lớn, riêng tư |
+| **ML Models** | `*.pkl`, `*.joblib`, `models/` | File lớn, tái tạo được |
+| **Email Config** | `ml_pipeline/email_config.yaml` | Chứa email cá nhân |
+| **Python Cache** | `__pycache__/`, `*.pyc` | Cache không cần thiết |
+| **DBT** | `target/`, `dbt_packages/` | Build artifacts |
+| **Airflow** | `logs/`, `*.pid` | Logs và temp files |
+| **Docker** | `postgres_data/`, `*_data/` | Database volumes |
 
-### Bước 1: Kiểm tra Git Status
+---
+
+## 🚀 Các Bước Push Lên GitHub
+
+### Bước 1: Kiểm tra Trạng Thái
 
 ```bash
 cd /home/annduke/retail_data_pipeline
 
 # Kiểm tra file nào đã thay đổi
 git status
+
+# Xem chi tiết thay đổi
+git diff
 ```
 
-**Kết quả mong muốn:** Không thấy `.env` và `email_config.yaml` trong danh sách.
+**Lưu ý:** Đảm bảo không thấy file nhạy cảm như `.env` trong danh sách.
 
-### Bước 2: Nếu chưa có Git Repository
+---
+
+### Bước 2: Cấu hình Git (Nếu chưa có)
 
 ```bash
-# Khởi tạo repository
-git init
+# Thiết lập username và email
+git config --global user.name "Your Name"
+git config --global user.email "your.email@example.com"
 
-# Thêm remote (thay YOUR_USERNAME bằng username GitHub của bạn)
-git remote add origin https://github.com/YOUR_USERNAME/retail_data_pipeline.git
+# Kiểm tra remote URL
+git remote -v
+
+# Nếu chưa có remote, thêm mới:
+git remote add origin https://github.com/YOUR_USERNAME/API_ETL_XGBoost.git
 ```
 
-### Bước 3: Kiểm tra kỹ trước khi add
+---
 
-```bash
-# Xem tất cả file sẽ được commit
-git status
-
-# Nếu thấy file nhạy cảm trong danh sách, KHÔNG ĐƯỢC add!
-# Ví dụ: 
-# ❌ .env
-# ❌ ml_pipeline/email_config.yaml
-```
-
-### Bước 4: Add các file an toàn
+### Bước 3: Thêm File vào Staging
 
 **Cách 1: Add tất cả (Git sẽ tự động bỏ qua file trong .gitignore)**
 
@@ -55,201 +63,259 @@ git status
 git add .
 ```
 
-**Cách 2: Add từng file cụ thể (an toàn hơn)**
+**Cách 2: Add từng phần (Kiểm soát tốt hơn)**
 
 ```bash
-# Core files
-git add README.md
-git add ARCHITECTURE.md
-git add QUICK_REFERENCE.md
-git add Makefile
-git add docker-compose.yml
-git add .gitignore
+# Core project files
+git add README.md ARCHITECTURE.md QUICK_REFERENCE.md AGENTS.md
+git add Makefile docker-compose.yml .gitignore
 
-# ML Pipeline (KHÔNG add email_config.yaml)
-git add ml_pipeline/email_config.example.yaml
-git add ml_pipeline/email_notifier.py
-git add ml_pipeline/test_email.py
-git add ml_pipeline/xgboost_forecast.py
-git add ml_pipeline/train_models.py
-git add ml_pipeline/requirements.txt
-git add ml_pipeline/Dockerfile
-git add ml_pipeline/db_connectors.py
-git add ml_pipeline/EMAIL_SETUP.md
-
-# Config
+# Source code
+git add data_cleaning/
+git add ml_pipeline/
+git add dbt_retail/
+git add airflow/dags/
+git add superset/
+git add init/
 git add config/
 
-# Airflow
-git add airflow/dags/
+# Scripts
+git add process_csv.sh
 
-# DBT
-git add dbt_retail/
-
-# Init scripts
-git add init/
-
-# Data cleaning
-git add data_cleaning/
-
-# Superset
-git add superset/
+# Documentation
+git add GIT_COMMIT_GUIDE.md
 ```
 
-### Bước 5: Kiểm tra lại lần cuối
+---
+
+### Bước 4: Kiểm Tra Lại Trước Khi Commit
 
 ```bash
-# Xem các file đã staged
+# Xem danh sách file đã staged
 git diff --cached --name-only
 
-# Đảm bảo KHÔNG có:
+# Đảm bảo KHÔNG có các file sau:
 # - .env
-# - ml_pipeline/email_config.yaml
+# - csv_input/*.csv
+# - ml_pipeline/models/*.pkl
 # - __pycache__/
-# - *.pkl
+# - ml_pipeline/email_config.yaml
+
+# Nếu thấy file nhạy cảm, loại bỏ ngay:
+git reset HEAD <tên-file>
 ```
 
-### Bước 6: Commit
+---
+
+### Bước 5: Commit
 
 ```bash
 # Commit với message rõ ràng
-git commit -m "feat: Add email notification system for ML pipeline
+git commit -m "feat: Major update - Remove MSSQL, add Optuna tuning
 
-- Add email_notifier.py with HTML templates
-- Support training_report, forecast_report, error_alert
-- Add email_config.example.yaml as template
-- Add security checks for placeholder emails
-- Update .gitignore to protect sensitive configs
-
-Security:
-- email_config.yaml ignored (contains personal emails)
-- .env ignored (contains passwords)
-- Recipients can be set via environment variables"
+- Remove MSSQL service (reduce complexity)
+- Add Optuna hyperparameter tuning for XGBoost
+- Add Airflow DAG for daily CSV import (2AM schedule)
+- Update documentation (README, AGENTS.md, ARCHITECTURE.md)
+- Simplify CSV processing (remove real-time watcher)"
 ```
 
-### Bước 7: Push lên GitHub
+**Quy ước viết commit message:**
+- `feat:` - Thêm tính năng mới
+- `fix:` - Sửa lỗi
+- `docs:` - Thay đổi documentation
+- `refactor:` - Tái cấu trúc code
+- `chore:` - Thay đổi nhỏ, maintenance
+
+---
+
+### Bước 6: Push Lên GitHub
+
+#### Cách A: Dùng HTTPS + Personal Access Token (Khuyến nghị)
 
 ```bash
-# Nếu là lần đầu
-git branch -M main
-git push -u origin main
+# 1. Tạo Personal Access Token trên GitHub:
+#    Settings → Developer settings → Personal access tokens → Generate new token
+#    Chọn quyền: repo
 
-# Nếu đã có remote
+# 2. Cập nhật remote URL với token:
+git remote set-url origin https://TOKEN@github.com/Annduke128/API_ETL_XGBoost.git
+
+# 3. Push lên main branch:
+git push -u origin main
+```
+
+#### Cách B: Dùng SSH Key
+
+```bash
+# 1. Tạo SSH key (nếu chưa có):
+ssh-keygen -t ed25519 -C "your.email@example.com"
+
+# 2. Copy public key:
+cat ~/.ssh/id_ed25519.pub
+
+# 3. Thêm vào GitHub:
+#    Settings → SSH and GPG keys → New SSH key
+
+# 4. Cập nhật remote URL:
+git remote set-url origin git@github.com:Annduke128/API_ETL_XGBoost.git
+
+# 5. Push:
+git push -u origin main
+```
+
+#### Cách C: Dùng GitHub CLI
+
+```bash
+# Cài đặt gh CLI trước: https://cli.github.com/
+
+# Đăng nhập
+gh auth login
+
+# Push
+gh repo sync
+```
+
+---
+
+## 🔍 Kiểm Tra Sau Khi Push
+
+### 1. Kiểm tra trên GitHub
+
+Mở: `https://github.com/Annduke128/API_ETL_XGBoost`
+
+- [ ] Commit mới xuất hiện
+- [ ] Không có file `.env`
+- [ ] Không có file `*.pkl`
+- [ ] Không có thư mục `__pycache__`
+- [ ] Không có file CSV trong `csv_input/`
+
+### 2. Kiểm tra bằng lệnh
+
+```bash
+# Xem commit mới nhất
+git log --oneline -5
+
+# Kiểm tra remote
+git remote -v
+
+# Kiểm tra branch
+git branch -a
+```
+
+---
+
+## 🆘 Xử Lý Lỗi Thường Gặp
+
+### Lỗi 1: "fatal: could not read Username"
+
+```bash
+# Nguyên nhân: Chưa cấu hình xác thực
+# Giải pháp: Dùng token hoặc SSH (xem Bước 6 bên trên)
+```
+
+### Lỗi 2: "rejected: non-fast-forward"
+
+```bash
+# Nguyên nhân: Có thay đổi trên remote chưa pull về
+# Giải pháp:
+git pull origin main --rebase
 git push origin main
 ```
 
-## 🔍 KIỂM TRA SAU KHI COMMIT
-
-### Kiểm tra trên GitHub
-
-1. Mở repository trên GitHub
-2. Vào tab "Commits"
-3. Kiểm tra commit mới nhất
-4. Đảm bảo KHÔNG thấy các file:
-   - `.env`
-   - `ml_pipeline/email_config.yaml`
-
-### Kiểm tra bằng lệnh
+### Lỗi 3: Vô tình commit file nhạy cảm (chưa push)
 
 ```bash
-# Xem lịch sử commit
-git log --oneline -5
-
-# Kiểm tra file trong commit
-git ls-tree -r HEAD --name-only | grep -E "(\.env|email_config\.yaml)"
-# Kết quả nên rỗng (không có gì)
-```
-
-## 🆘 XỬ LÝ SỰ CỐ
-
-### Trường hợp 1: Đã vô tình add file nhạy cảm
-
-```bash
-# Xem file nào đang staged
-git status
-
-# Nếu thấy .env hoặc email_config.yaml trong "Changes to be committed":
-git reset HEAD .env
-git reset HEAD ml_pipeline/email_config.yaml
-
-# Kiểm tra lại
-git status
-```
-
-### Trường hợp 2: Đã commit nhầm file nhạy cảm (chưa push)
-
-```bash
-# Xóa file khỏi commit gần nhất nhưng giữ nguyên file trong working directory
+# Loại bỏ file khỏi commit gần nhất
 git reset --soft HEAD~1
 
-# Bỏ staged file nhạy cảm
+# Bỏ file nhạy cảm khỏi staged
 git reset HEAD .env
-git reset HEAD ml_pipeline/email_config.yaml
 
 # Commit lại
 git commit -m "Your commit message"
 ```
 
-### Trường hợp 3: Đã push lên GitHub (NGHIÊM TRỌNG)
-
-Nếu đã push file chứa password/email lên GitHub:
+### Lỗi 4: Vô tình push file nhạy cảm lên GitHub
 
 ```bash
-# 1. Xóa file khỏi Git history (file vẫn còn trong máy)
+# 1. Xóa file khỏi Git history
 git filter-branch --force --index-filter \
 "git rm --cached --ignore-unmatch .env ml_pipeline/email_config.yaml" \
 --prune-empty --tag-name-filter cat -- --all
 
-# 2. Force push (CẢNH BÁO: làm thay đổi history)
+# 2. Force push
 git push origin --force --all
 
-# 3. Thay đổi password/email ngay lập tức!
+# 3. ĐỔI PASSWORD NGAY LẬP TỨC!
 # Vì đã bị lộ trên GitHub
 ```
 
-## 📋 CHECKLIST TRƯỚC KHI PUSH
+---
 
-- [ ] `git status` không hiển thị `.env`
-- [ ] `git status` không hiển thị `email_config.yaml`
-- [ ] Không có file `.pkl`, `.joblib`
+## ✅ Checklist Trước Khi Push
+
+- [ ] Đã chạy `git status` kiểm tra
+- [ ] Không có file `.env` trong staged
+- [ ] Không có file `*.pkl`, `*.joblib`
 - [ ] Không có thư mục `__pycache__`
-- [ ] Message commit rõ ràng
-- [ ] Đã test chạy được trên local
+- [ ] Không có file CSV trong `csv_input/`
+- [ ] Commit message rõ ràng
+- [ ] Đã test code chạy được trên local
 
-## 🎯 VÍ DỤ HOÀN CHỈNH
+---
+
+## 📝 Ví Dụ Hoàn Chỉnh
 
 ```bash
 # 1. Vào thư mục project
 cd /home/annduke/retail_data_pipeline
 
-# 2. Kiểm tra status
+# 2. Kiểm tra trạng thái
 git status
 
-# 3. Add files
+# 3. Thêm tất cả file (trừ file trong .gitignore)
 git add .
 
 # 4. Kiểm tra lại
-git diff --cached --name-only | grep -E "(\.env|email_config\.yaml)"
+git diff --cached --name-only | grep -E "(\.env|\.pkl|csv_input)"
 # Nếu có kết quả → reset và bỏ qua file đó
 
 # 5. Commit
-git commit -m "feat: Add email notifications for ML pipeline
+git commit -m "feat: Remove MSSQL, add Optuna tuning and Airflow scheduling
 
-- Email notifier with HTML templates
-- Support 3 report types: training, forecast, error
-- Environment variable support for recipients
-- Security: ignore sensitive config files"
+- Remove MSSQL to simplify architecture
+- Add Optuna hyperparameter tuning
+- Add Airflow DAG for daily CSV import at 2AM
+- Update README and documentation"
 
-# 6. Push
-git push origin main
+# 6. Cấu hình remote với token (chỉ cần làm 1 lần)
+git remote set-url origin https://YOUR_TOKEN@github.com/Annduke128/API_ETL_XGBoost.git
 
-# 7. Kiểm tra trên GitHub
-# Mở https://github.com/YOUR_USERNAME/retail_data_pipeline
+# 7. Push
+git push -u origin main
+
+# 8. Kiểm tra
+git log --oneline -3
 ```
 
-## 📞 HỖ TRỢ
+---
 
-Nếu gặp lỗi:
-1. Đừng panic - luôn có cách fix
-2. Kiểm tra `git status`
-3. Nếu đã push file nhạy cảm: đổi password ngay lập tức
+## 📚 Tham Khảo
+
+- [GitHub Docs - Authentication](https://docs.github.com/en/authentication)
+- [GitHub Docs - Managing remote repositories](https://docs.github.com/en/get-started/getting-started-with-git/managing-remote-repositories)
+- [Git - Rewriting History](https://git-scm.com/book/en/v2/Git-Tools-Rewriting-History)
+
+---
+
+## 💡 Mẹo
+
+1. **Luôn kiểm tra `git status` trước khi commit**
+2. **Dùng `git diff --cached` để xem chính xác những gì sẽ được commit**
+3. **Commit thường xuyên, push ít thường xuyên hơn**
+4. **Viết commit message rõ ràng, mô tả được ý định thay đổi**
+
+---
+
+**Last Updated:** 2024-02-14
