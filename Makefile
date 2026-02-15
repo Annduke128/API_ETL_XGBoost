@@ -133,14 +133,6 @@ health-superset:
 # Xử lý CSV một lần
 process: csv-import
 
-csv-import:
-	@echo "📁 Processing CSV files..."
-	docker-compose run --rm \
-		-v "$(PWD)/csv_input:/csv_input" \
-		-v "$(PWD)/csv_output:/csv_output" \
-		csv-watcher \
-		python auto_process_csv.py --input /csv_input --output /csv_output
-
 # Trigger CSV import manually (chạy 1 lần)
 csv-import:
 	@echo "📁 Processing CSV files..."

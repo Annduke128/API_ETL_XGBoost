@@ -7,7 +7,7 @@
 
 WITH customer_base AS (
     SELECT 
-        branch_code AS customer_id,  -- Tạm thời dùng branch_code làm proxy
+        ma_chi_nhanh AS customer_id,  -- Tạm thời dùng branch_code làm proxy
         transaction_date,
         revenue,
         gross_profit

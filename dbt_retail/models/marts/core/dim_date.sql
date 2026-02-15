@@ -6,11 +6,12 @@
 }}
 
 WITH date_spine AS (
-    {{ dbt_utils.date_spine(
-        datepart="day",
-        start_date="'2020-01-01'",
-        end_date="'2030-12-31'"
-    ) }}
+    -- Tạo danh sách ngày từ 2020-01-01 đến 2030-12-31
+    SELECT generate_series(
+        '2020-01-01'::date,
+        '2030-12-31'::date,
+        '1 day'::interval
+    )::date AS date_day
 ),
 
 dim_date AS (

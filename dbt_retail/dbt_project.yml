@@ -71,9 +71,6 @@ models:
       
       customers:
         +tags: ['customers']
-      
-      marketing:
-        +tags: ['marketing']
 
 seeds:
   retail_analytics:
@@ -92,7 +89,4 @@ seeds:
         gia_von_mac_dinh: numeric(15,2)
         gia_ban_mac_dinh: numeric(15,2)
 
-snapshots:
-  retail_analytics:
-    +target_schema: snapshots
-    +tags: ['scd']
+

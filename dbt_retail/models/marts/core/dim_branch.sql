@@ -23,8 +23,8 @@ dim_branch AS (
         b.branch_type,
         
         -- Hiệu suất
-        COALESCE(bp.total_historical_revenue, 0) AS total_historical_revenue,
-        COALESCE(bp.total_historical_transactions, 0) AS total_historical_transactions,
+        COALESCE(bp.total_revenue, 0) AS total_historical_revenue,
+        COALESCE(bp.total_transactions, 0) AS total_historical_transactions,
         COALESCE(bp.avg_transaction_value, 0) AS avg_transaction_value,
         COALESCE(bp.revenue_rank, 0) AS revenue_rank,
         

@@ -41,9 +41,9 @@ dim_product AS (
         COALESCE(pp.abc_class, 'N/A') AS abc_class,
         
         -- Hiệu suất
-        COALESCE(pp.total_historical_revenue, 0) AS total_historical_revenue,
-        COALESCE(pp.total_historical_quantity, 0) AS total_historical_quantity,
-        COALESCE(pp.historical_profit_margin, 0) AS historical_profit_margin,
+        COALESCE(pp.total_revenue, 0) AS total_historical_revenue,
+        COALESCE(pp.total_quantity_sold, 0) AS total_historical_quantity,
+        COALESCE(pp.profit_margin, 0) AS historical_profit_margin,
         
         -- Trạng thái
         CASE 
