@@ -66,15 +66,7 @@ class SalesForecaster:
                 logger.info("📧 Email notifier đã được khởi tạo")
             except Exception as e:
                 logger.warning(f"⚠️ Không thể khởi tạo email notifier: {e}")
-        self.feature_cols = [
-            'day_of_week', 'day_of_month', 'month', 'week_of_year',
-            'is_weekend', 'is_month_start', 'is_month_end', 'is_holiday',
-            'lag_1_quantity', 'lag_7_quantity', 'lag_14_quantity', 'lag_30_quantity',
-            'lag_1_revenue', 'lag_7_revenue', 'lag_14_revenue',
-            'rolling_mean_7_quantity', 'rolling_std_7_quantity',
-            'rolling_mean_30_quantity', 'quantity_growth',
-            'branch_encoded', 'category1_encoded', 'category2_encoded'
-        ]
+        self.feature_cols = []  # Sẽ được cập nhật động sau khi create_features
     
     def load_historical_data(self, days: int = 365) -> pd.DataFrame:
         """Load dữ liệu lịch sử từ ClickHouse"""
@@ -115,14 +107,27 @@ class SalesForecaster:
         # Vietnamese holidays (simplified)
         df['is_holiday'] = self._is_vietnamese_holiday(df['ngay']).astype(int)
         
-        # Lag features
+        # Lag features - điều chỉnh dựa trên số ngày dữ liệu có sẵn
         df = df.sort_values(['chi_nhanh', 'ma_hang', 'ngay'])
-        for lag in [1, 7, 14, 30]:
+        n_unique_days = df['ngay'].nunique()
+        
+        # Chỉ dùng các lag hợp lý dựa trên số ngày dữ liệu
+        available_lags = [lag for lag in [1, 7, 14, 30] if lag < n_unique_days]
+        if not available_lags:
+            available_lags = [1]  # Ít nhất cần lag 1
+        
+        logger.info(f"Sử dụng lag features: {available_lags} (dữ liệu có {n_unique_days} ngày)")
+        
+        for lag in available_lags:
             df[f'lag_{lag}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'].shift(lag)
             df[f'lag_{lag}_revenue'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_revenue'].shift(lag)
         
-        # Rolling statistics
-        for window in [7, 14, 30]:
+        # Rolling statistics - giảm window nếu dữ liệu ít
+        available_windows = [w for w in [7, 14, 30] if w <= n_unique_days]
+        if not available_windows:
+            available_windows = [min(3, n_unique_days)]  # Mặc định 3 ngày nếu ít dữ liệu
+        
+        for window in available_windows:
             df[f'rolling_mean_{window}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'] \
                 .transform(lambda x: x.rolling(window, min_periods=1).mean())
             df[f'rolling_std_{window}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'] \
@@ -161,7 +166,8 @@ class SalesForecaster:
     
     def train_model(self, df: pd.DataFrame, target_col: str = 'daily_quantity') -> xgb.XGBRegressor:
         """Train XGBoost model với default hyperparameters (không tuning)"""
-        df_clean = df.dropna()
+        # Chỉ dropna trong target column, fillna cho features
+        df_clean = df.dropna(subset=[target_col]).copy()
         
         # Kiểm tra dữ liệu
         if len(df_clean) == 0:
@@ -173,8 +179,12 @@ class SalesForecaster:
                 random_state=42
             )
         
-        # Chỉ sử dụng các features có sẵn trong dataframe
-        available_features = [col for col in self.feature_cols if col in df_clean.columns]
+        # Tự động xác định feature columns (bỏ qua các cột metadata và target)
+        exclude_cols = {'ngay', 'chi_nhanh', 'ma_hang', 'nhom_hang_cap_1', 'nhom_hang_cap_2', 
+                       'daily_quantity', 'daily_revenue', 'daily_profit', 'transaction_count',
+                       target_col}
+        available_features = [col for col in df_clean.columns if col not in exclude_cols]
+        
         if not available_features:
             logger.error(f"❌ Không có features nào phù hợp trong dữ liệu")
             return xgb.XGBRegressor(
@@ -184,10 +194,9 @@ class SalesForecaster:
                 random_state=42
             )
         
-        if len(available_features) < len(self.feature_cols):
-            logger.warning(f"⚠️ Chỉ có {len(available_features)}/{len(self.feature_cols)} features khả dụng")
+        logger.info(f"📊 Sử dụng {len(available_features)} features: {available_features[:5]}...")
         
-        X = df_clean[available_features]
+        X = df_clean[available_features].fillna(0)  # Fill NA với 0
         y = df_clean[target_col]
         
         # Điều chỉnh n_splits dựa trên số lượng dữ liệu
@@ -253,12 +262,12 @@ class SalesForecaster:
             logger.warning("Optuna not available, falling back to RandomizedSearchCV")
             return self.train_model_random_search(df, target_col)
         
-        df_clean = df.dropna()
+        # Chỉ dropna trong target, fillna cho features
+        df_clean = df.dropna(subset=[target_col]).copy()
         
         # Kiểm tra dữ liệu sau khi dropna
         if len(df_clean) == 0:
             logger.error(f"❌ Không có dữ liệu sau khi loại bỏ NA cho target '{target_col}'")
-            # Trả về model mặc định
             return xgb.XGBRegressor(
                 objective='reg:squarederror',
                 n_estimators=100,
@@ -266,8 +275,12 @@ class SalesForecaster:
                 random_state=42
             )
         
-        # Chỉ sử dụng các features có sẵn trong dataframe
-        available_features = [col for col in self.feature_cols if col in df_clean.columns]
+        # Tự động xác định feature columns
+        exclude_cols = {'ngay', 'chi_nhanh', 'ma_hang', 'nhom_hang_cap_1', 'nhom_hang_cap_2', 
+                       'daily_quantity', 'daily_revenue', 'daily_profit', 'transaction_count',
+                       target_col}
+        available_features = [col for col in df_clean.columns if col not in exclude_cols]
+        
         if not available_features:
             logger.error(f"❌ Không có features nào phù hợp trong dữ liệu")
             return xgb.XGBRegressor(
@@ -277,10 +290,9 @@ class SalesForecaster:
                 random_state=42
             )
         
-        if len(available_features) < len(self.feature_cols):
-            logger.warning(f"⚠️ Chỉ có {len(available_features)}/{len(self.feature_cols)} features khả dụng cho Optuna")
+        logger.info(f"📊 Optuna sử dụng {len(available_features)} features")
         
-        X = df_clean[available_features]
+        X = df_clean[available_features].fillna(0)
         y = df_clean[target_col]
         
         # Kiểm tra số lượng mẫu
