@@ -37,24 +37,24 @@ dag = DAG(
     tags=['retail', 'etl', 'daily'],
 )
 
-# Task 1: Kiểm tra file CSV mới
-wait_for_csv = FileSensor(
-    task_id='wait_for_csv_files',
-    filepath='/opt/airflow/csv_input/*.csv',
+# Task 1: Kiểm tra file CSV hoặc Excel mới
+wait_for_files = FileSensor(
+    task_id='wait_for_files',
+    filepath='/opt/airflow/csv_input/*.csv',  # FileSensor chỉ hỗ trợ 1 pattern
     fs_conn_id='fs_default',
     poke_interval=60,
     timeout=600,
     dag=dag,
 )
 
-# Task 2: Xử lý CSV (clean và load vào PostgreSQL)
-def process_csv_files(**context):
-    """Xử lý các file CSV trong thư mục input"""
+# Task 2: Xử lý files (CSV và Excel) - clean và load vào PostgreSQL
+def process_data_files(**context):
+    """Xử lý các file CSV và Excel trong thư mục input"""
     import os
     import sys
     sys.path.append('/opt/airflow/data_cleaning')
     
-    from csv_processor import RetailDataCleaner
+    from data_processor import RetailDataCleaner
     from db_connectors import PostgreSQLConnector
     
     input_dir = '/opt/airflow/csv_input'
@@ -70,11 +70,13 @@ def process_csv_files(**context):
     )
     
     processed_count = 0
+    supported_extensions = ('.csv', '.xlsx', '.xls')
+    
     for filename in os.listdir(input_dir):
-        if filename.endswith('.csv'):
+        if filename.lower().endswith(supported_extensions):
             file_path = os.path.join(input_dir, filename)
             try:
-                # Clean data
+                # Clean data (tự động nhận diện định dạng)
                 df = cleaner.clean(file_path)
                 
                 # Insert vào PostgreSQL
@@ -90,9 +92,9 @@ def process_csv_files(**context):
     
     return f"Processed {processed_count} files"
 
-process_csv = PythonOperator(
-    task_id='process_csv_files',
-    python_callable=process_csv_files,
+process_files = PythonOperator(
+    task_id='process_data_files',
+    python_callable=process_data_files,
     dag=dag,
 )
 
@@ -193,7 +195,7 @@ refresh_cache = PythonOperator(
 )
 
 # Define dependencies
-wait_for_csv >> process_csv >> sync_clickhouse >> dbt_run >> dbt_test >> refresh_cache
+wait_for_files >> process_files >> sync_clickhouse >> dbt_run >> dbt_test >> refresh_cache
 
 
 # ============================================

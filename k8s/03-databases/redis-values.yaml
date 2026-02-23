@@ -1,0 +1,32 @@
+# Helm values cho Redis HA trên K3s
+# Cài đặt: helm install redis bitnami/redis -n retail-data -f redis-values.yaml
+
+architecture: replication
+auth:
+  enabled: true
+  password: "redis_password"
+
+sentinel:
+  enabled: true
+  quorum: 1
+
+replica:
+  replicaCount: 1
+  persistence:
+    enabled: true
+    storageClass: longhorn-fast
+    size: 10Gi
+    
+master:
+  persistence:
+    enabled: true
+    storageClass: longhorn-fast
+    size: 10Gi
+
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "250m"
+  limits:
+    memory: "1Gi"
+    cpu: "500m"

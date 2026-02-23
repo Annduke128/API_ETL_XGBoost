@@ -1,12 +1,7 @@
 {{
     config(
         materialized='table',
-        unique_key=['date_key', 'branch_id', 'product_id'],
-        partition_by={
-            "field": "transaction_date",
-            "data_type": "date",
-            "granularity": "month"
-        }
+        engine='MergeTree()'
     )
 }}
 
@@ -16,16 +11,16 @@ WITH transaction_details AS (
 
 daily_sales AS (
     SELECT
-        td.transaction_date,
-        CAST(TO_CHAR(td.transaction_date, 'YYYYMMDD') AS INTEGER) AS date_key,
+        td.transaction_date AS transaction_date,
+        toYYYYMMDD(td.transaction_date) AS date_key,
         
         -- Product
-        td.product_code,
-        p.product_id,
+        td.product_code AS product_code,
+        p.product_id AS product_id,
         
         -- Branch (lấy từ transaction)
-        t.branch_code,
-        b.branch_id,
+        t.branch_code AS branch_code,
+        b.branch_id AS branch_id,
         
         -- Số liệu
         COUNT(DISTINCT td.transaction_id) AS transaction_count,
@@ -46,7 +41,7 @@ daily_sales AS (
         END AS profit_margin,
         
         -- Timestamp
-        CURRENT_TIMESTAMP AS etl_timestamp
+        now() AS etl_timestamp
         
     FROM transaction_details td
     LEFT JOIN {{ ref('dim_product') }} p ON td.product_code = p.product_code
@@ -54,11 +49,11 @@ daily_sales AS (
     LEFT JOIN {{ ref('dim_branch') }} b ON t.branch_code = b.branch_code
     
     GROUP BY 
-        td.transaction_date,
-        td.product_code,
-        p.product_id,
-        t.branch_code,
-        b.branch_id
+        transaction_date,
+        product_code,
+        product_id,
+        branch_code,
+        branch_id
 )
 
 SELECT * FROM daily_sales

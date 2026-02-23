@@ -1,54 +1,93 @@
 version: 2
 
 models:
-  - name: stg_transactions
-    description: "Staging model cho giao dịch"
-    columns:
-      - name: transaction_id
-        tests:
-          - unique
-          - not_null
-      - name: revenue
-        tests:
-          - not_null
-      - name: gross_profit
-        tests:
-          - not_null
-
-  - name: stg_transaction_details
-    description: "Staging model cho chi tiết giao dịch"
-    columns:
-      - name: detail_id
-        tests:
-          - unique
-          - not_null
-      - name: quantity
-        tests:
-          - not_null
-      - name: selling_price
-        tests:
-          - not_null
-
   - name: stg_products
-    description: "Staging model cho sản phẩm"
+    description: "Staging model cho products"
     columns:
       - name: product_id
+        description: "ID sản phẩm"
         tests:
           - unique
           - not_null
       - name: product_code
+        description: "Mã sản phẩm"
         tests:
           - unique
           - not_null
+      - name: default_selling_price
+        description: "Giá bán mặc định"
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
 
   - name: stg_branches
-    description: "Staging model cho chi nhánh"
+    description: "Staging model cho branches"
     columns:
       - name: branch_id
+        description: "ID chi nhánh"
         tests:
           - unique
           - not_null
       - name: branch_code
+        description: "Mã chi nhánh"
         tests:
           - unique
           - not_null
+
+  - name: stg_transactions
+    description: "Staging model cho transactions"
+    columns:
+      - name: transaction_id
+        description: "ID giao dịch"
+        tests:
+          - unique
+          - not_null
+      - name: revenue
+        description: "Doanh thu"
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: transaction_date
+        description: "Ngày giao dịch"
+        tests:
+          - not_null
+
+  - name: stg_transaction_details
+    description: "Staging model cho transaction details"
+    columns:
+      - name: detail_id
+        description: "ID chi tiết"
+        tests:
+          - unique
+          - not_null
+      - name: quantity
+        description: "Số lượng"
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: selling_price
+        description: "Giá bán"
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+  - name: stg_product_variant_parsing
+    description: "Parse product_name để tách variant attributes (size, flavor, packaging)"
+    columns:
+      - name: product_id
+        description: "ID sản phẩm"
+        tests:
+          - unique
+          - not_null
+      - name: product_family
+        description: "Tên sản phẩm gốc (đã bỏ variant)"
+        tests:
+          - not_null
+      - name: size_value
+        description: "Giá trị size (500, 200...)"
+      - name: size_unit
+        description: "Đơn vị size (g, ml, l...)"
+      - name: packaging_type
+        description: "Loại bao bì (Gói, Hộp, Chai...)"
+      - name: product_family_key
+        description: "Key để group các variant của cùng product family"

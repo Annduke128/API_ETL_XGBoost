@@ -196,6 +196,11 @@ class EmailNotifier:
         
         smtp_config = self.config.get('smtp', {})
         sender_email = smtp_config.get('sender_email', 'ml-pipeline@company.com')
+        
+        # Nếu sender_email là template hoặc giá trị mặc định, lấy từ environment
+        if sender_email.startswith('${') or sender_email == 'ml-pipeline@company.com':
+            sender_email = os.getenv('EMAIL_SENDER', sender_email)
+        
         sender_name = smtp_config.get('sender_name', 'ML Pipeline System')
         
         # Tạo message
@@ -298,28 +303,48 @@ class EmailNotifier:
         return self._send_email(subject, html_body, attachments, report_type='training_report')
     
     def _create_training_html(self, metrics: Dict, duration: float, timestamp: str) -> str:
-        """Tạo HTML cho training report"""
+        """Tạo HTML cho training report với metrics phù hợp cho từng model"""
+        
+        # Map model names đến (display_name, primary_metric, metric_label)
+        model_info_map = {
+            'daily_quantity': ('Product Quantity (Model 1)', 'cv_mdape', 'MdAPE'),
+            'profit_margin': ('Profit Margin (Model 2)', 'cv_mae', 'MAE'),
+            'category_daily_quantity': ('Category Trend (Model 3)', 'cv_mape', 'MAPE')
+        }
         
         # Tạo rows cho metrics table
         metric_rows = ""
-        for model_name, model_metrics in metrics.items():
+        for model_key, model_metrics in metrics.items():
             tuning_method = model_metrics.get('tuning_method', 'default')
-            cv_mape = model_metrics.get('cv_mape', 'N/A')
-            val_mape = model_metrics.get('val_mape', 'N/A')
+            primary_metric = model_metrics.get('primary_metric', 'mape')
+            
+            # Lấy thông tin model
+            display_name, cv_key, metric_label = model_info_map.get(
+                model_key, (model_key, 'cv_mape', 'MAPE')
+            )
+            
+            # Lấy giá trị metrics
+            cv_value = model_metrics.get(cv_key, 'N/A')
             val_rmse = model_metrics.get('val_rmse', 'N/A')
             val_mae = model_metrics.get('val_mae', 'N/A')
+            val_mape = model_metrics.get('val_mape', 'N/A')
+            val_mdape = model_metrics.get('val_mdape', 'N/A')
             
-            cv_mape_str = f"{cv_mape:.4f}" if isinstance(cv_mape, float) else str(cv_mape)
-            val_mape_str = f"{val_mape:.4f}" if isinstance(val_mape, float) else 'N/A'
+            # Format giá trị
+            if isinstance(cv_value, float):
+                cv_str = f"{cv_value:.4f}" if cv_value < 1 else f"{cv_value:.2f}"
+                cv_color = self._get_mape_color(cv_value / 100 if cv_value > 1 else cv_value)
+            else:
+                cv_str = str(cv_value)
+                cv_color = '#333'
+            
             val_rmse_str = f"{val_rmse:.2f}" if isinstance(val_rmse, float) else 'N/A'
-            val_mae_str = f"{val_mae:.2f}" if isinstance(val_mae, float) else 'N/A'
-            
-            # Màu cho MAPE
-            mape_color = self._get_mape_color(cv_mape if isinstance(cv_mape, float) else 1.0)
+            val_mae_str = f"{val_mae:.4f}" if isinstance(val_mae, float) else 'N/A'
+            val_mape_str = f"{val_mape:.2f}%" if isinstance(val_mape, float) else 'N/A'
             
             metric_rows += f"""
                 <tr>
-                    <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; font-weight: 500;">{model_name}</td>
+                    <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; font-weight: 500;">{display_name}</td>
                     <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center;">
                         <span style="background: {self._get_method_color(tuning_method)}; 
                                      color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px;">
@@ -327,10 +352,10 @@ class EmailNotifier:
                         </span>
                     </td>
                     <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center; 
-                               color: {mape_color}; font-weight: bold;">{cv_mape_str}</td>
+                               color: {cv_color}; font-weight: bold;">{cv_str} <small>({metric_label})</small></td>
+                    <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center;">{val_mae_str}</td>
                     <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center;">{val_mape_str}</td>
                     <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center;">{val_rmse_str}</td>
-                    <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center;">{val_mae_str}</td>
                 </tr>
             """
         
@@ -401,10 +426,10 @@ class EmailNotifier:
                             <tr>
                                 <th>Model</th>
                                 <th style="text-align: center;">Method</th>
-                                <th style="text-align: center;">CV MAPE ↓</th>
+                                <th style="text-align: center;">Primary Metric ↓</th>
+                                <th style="text-align: center;">Val MAE ↓</th>
                                 <th style="text-align: center;">Val MAPE ↓</th>
                                 <th style="text-align: center;">Val RMSE ↓</th>
-                                <th style="text-align: center;">Val MAE ↓</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -421,10 +446,62 @@ class EmailNotifier:
                                 padding: 15px; margin: 20px 0; border-radius: 4px;">
                         <h4 style="margin: 0 0 10px 0; color: #e65100;">📌 Giải thích Metrics</h4>
                         <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #666;">
-                            <li><strong>MAPE (Mean Absolute Percentage Error):</strong> % sai số trung bình. &lt; 10% là rất tốt, 10-20% là tốt, &gt; 30% cần cải thiện.</li>
-                            <li><strong>RMSE (Root Mean Square Error):</strong> Sai số trung bình, nhạy cảm với outliers.</li>
-                            <li><strong>MAE (Mean Absolute Error):</strong> Sai số tuyệt đối trung bình.</li>
+                            <li><strong>Model 1 - MdAPE (Median Absolute Percentage Error):</strong> Trung vị % sai số. Ít nhạy với outliers hơn MAPE. Dùng cho dự báo số lượng.</li>
+                            <li><strong>Model 2 - MAE (Mean Absolute Error):</strong> Sai số tuyệt đối trung bình. Phù hợp cho profit margin (range 0-1).</li>
+                            <li><strong>Model 3 - MAPE (Mean Absolute Percentage Error):</strong> % sai số trung bình. Dùng cho category trend.</li>
+                            <li><strong>RMSE (Root Mean Square Error):</strong> Sai số bình phương trung bình, nhạy cảm với outliers.</li>
                         </ul>
+                        <p style="margin: 10px 0 0 0; font-size: 12px; color: #999;">
+                            <strong>Lưu ý:</strong> Model 3 có độ tin cậy thấp do thiếu dữ liệu mùa vụ (&lt; 1 năm).
+                        </p>
+                    </div>
+                    
+                    <div style="background: #e8f5e9; border-left: 4px solid #4caf50; 
+                                padding: 15px; margin: 20px 0; border-radius: 4px;">
+                        <h4 style="margin: 0 0 10px 0; color: #2e7d32;">✅ Hướng dẫn đánh giá mô hình</h4>
+                        <table style="width: 100%; font-size: 12px; margin-top: 10px;">
+                            <thead>
+                                <tr style="background: #f5f5f5;">
+                                    <th style="padding: 8px; text-align: left;">Model / Metric</th>
+                                    <th style="padding: 8px; text-align: center; color: #4caf50;">🟢 Tốt</th>
+                                    <th style="padding: 8px; text-align: center; color: #ff9800;">🟡 Chấp nhận</th>
+                                    <th style="padding: 8px; text-align: center; color: #f44336;">🔴 Cần xem lại</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td style="padding: 8px; border-bottom: 1px solid #e0e0e0;"><strong>Model 1</strong> (MdAPE)</td>
+                                    <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e0e0e0;">&lt; 10%</td>
+                                    <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e0e0e0;">10-20%</td>
+                                    <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e0e0e0;">&gt; 20%</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 8px; border-bottom: 1px solid #e0e0e0;"><strong>Model 2</strong> (MAE)</td>
+                                    <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e0e0e0;">&lt; 0.05</td>
+                                    <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e0e0e0;">0.05-0.15</td>
+                                    <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e0e0e0;">&gt; 0.15</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 8px;"><strong>Model 3</strong> (MAPE)</td>
+                                    <td style="padding: 8px; text-align: center;">&lt; 30%</td>
+                                    <td style="padding: 8px; text-align: center;">30-50%</td>
+                                    <td style="padding: 8px; text-align: center;">&gt; 50%</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <p style="margin: 10px 0 5px 0; font-size: 11px; color: #666;">
+                            <strong>⚠️ Dấu hiệu mô hình không hợp lý:</strong>
+                        </p>
+                        <ul style="margin: 0; padding-left: 20px; font-size: 11px; color: #666;">
+                            <li>MAPE/MdAPE &gt; 100%: Mô hình dự báo sai hoàn toàn (worse than naive)</li>
+                            <li>MAE &gt; 0.3 cho profit margin: Mô hình không học được pattern</li>
+                            <li>RMSE >> MAE: Có nhiều outliers prediction lớn</li>
+                            <li>CV score >> Val score: Overfitting nghiêm trọng</li>
+                            <li>Val MAPE rất cao (10^15+): Lỗi chia 0 trong target data</li>
+                        </ul>
+                        <p style="margin: 10px 0 0 0; font-size: 11px; color: #2e7d32;">
+                            <strong>💡 Khuyến nghị:</strong> Nếu thấy metrics ở vùng 🔴, hãy kiểm tra data quality hoặc liên hệ Data Science team.
+                        </p>
                     </div>
                     
                     <div class="footer">
@@ -497,18 +574,38 @@ class EmailNotifier:
         # Top sản phẩm có xu hướng tăng (predicted cao nhất)
         n_top = self.config.get('content', {}).get('top_trending_products', 10)
         if 'predicted_quantity' in forecasts.columns and 'ma_hang' in forecasts.columns:
-            top_products = forecasts.groupby('ma_hang')['predicted_quantity'].sum().sort_values(ascending=False).head(n_top)
+            # Group by product và lấy thông tin
+            product_cols = ['ma_hang', 'predicted_quantity']
+            if 'ten_san_pham' in forecasts.columns:
+                product_cols.append('ten_san_pham')
+            if 'nhom_hang_cap_1' in forecasts.columns:
+                product_cols.append('nhom_hang_cap_1')
+            
+            product_summary = forecasts.groupby('ma_hang').agg({
+                'predicted_quantity': 'sum',
+                'ten_san_pham': 'first' if 'ten_san_pham' in forecasts.columns else lambda x: '',
+                'nhom_hang_cap_1': 'first' if 'nhom_hang_cap_1' in forecasts.columns else lambda x: ''
+            }).sort_values('predicted_quantity', ascending=False).head(n_top)
+            
             top_products_html = ""
-            for i, (product, qty) in enumerate(top_products.items(), 1):
+            for i, (product, row) in enumerate(product_summary.iterrows(), 1):
+                qty = row['predicted_quantity']
+                name = row.get('ten_san_pham', '') if 'ten_san_pham' in row else ''
+                cat = row.get('nhom_hang_cap_1', '')[:25] if 'nhom_hang_cap_1' in row else ''
+                
                 top_products_html += f"""
                     <tr>
-                        <td style="padding: 10px; border-bottom: 1px solid #e0e0e0;">{i}</td>
-                        <td style="padding: 10px; border-bottom: 1px solid #e0e0e0; font-weight: 500;">{product}</td>
-                        <td style="padding: 10px; border-bottom: 1px solid #e0e0e0; text-align: right;">{int(qty):,}</td>
+                        <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center; color: #999;">{i}</td>
+                        <td style="padding: 12px; border-bottom: 1px solid #e0e0e0;">
+                            <div style="font-size: 15px; font-weight: 600; color: #333; line-height: 1.4;">{name}</div>
+                            <div style="font-size: 11px; color: #999; margin-top: 3px;">Mã SP: {product}</div>
+                        </td>
+                        <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; color: #666; font-size: 13px;">{cat}</td>
+                        <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: right; font-weight: bold; font-size: 15px; color: #11998e;">{int(qty):,}</td>
                     </tr>
                 """
         else:
-            top_products_html = '<tr><td colspan="3" style="text-align: center; color: #999;">Không có dữ liệu</td></tr>'
+            top_products_html = '<tr><td colspan="4" style="text-align: center; color: #999;">Không có dữ liệu</td></tr>'
         
         # Khuyến nghị tồn kho
         inventory_html = ""
@@ -516,20 +613,31 @@ class EmailNotifier:
             n_alerts = self.config.get('content', {}).get('top_inventory_alerts', 10)
             for i, rec in enumerate(inventory_recs[:n_alerts], 1):
                 urgency_color = '#f44336' if rec.get('reorder_urgency') == 'High' else '#ff9800'
+                product_code = rec.get('product_code', 'N/A')
+                product_name = rec.get('product_name', '')[:30] if 'product_name' in rec else ''
+                category = rec.get('category', '')
+                
                 inventory_html += f"""
                     <div style="background: #fff8e1; border-left: 4px solid {urgency_color}; 
                                 padding: 12px; margin: 8px 0; border-radius: 4px;">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <span style="font-weight: 600; color: #333;">{rec.get('product_code', 'N/A')}</span>
+                            <div>
+                                <span style="font-weight: 600; color: #333;">{product_code}</span><br>
+                                <small style="color: #666;">{product_name}</small>
+                            </div>
                             <span style="background: {urgency_color}; color: white; padding: 2px 8px; 
                                         border-radius: 4px; font-size: 11px;">
                                 {rec.get('reorder_urgency', 'Normal')}
                             </span>
                         </div>
                         <div style="font-size: 13px; color: #666; margin-top: 5px;">
-                            Dự báo 7 ngày: <strong>{rec.get('predicted_next_7_days', 0):,.0f}</strong> | 
-                            Safety Stock: <strong>{rec.get('recommended_safety_stock', 0):,}</strong> | 
-                            Đề xuất đặt: <strong>{rec.get('suggested_order_quantity', 0):,}</strong>
+                            Category: {category} | 
+                            Dự báo 7 ngày: <strong>{rec.get('predicted_7_days', 0):,.0f}</strong> units | 
+                            Margin: <strong>{rec.get('predicted_margin_pct', 0):.1f}%</strong>
+                        </div>
+                        <div style="font-size: 12px; color: #999; margin-top: 3px;">
+                            Safety Stock: {rec.get('safety_stock', 0):,} | 
+                            Đề xuất đặt: {rec.get('suggested_order_quantity', 0):,}
                         </div>
                     </div>
                 """
@@ -604,8 +712,9 @@ class EmailNotifier:
                         <thead>
                             <tr>
                                 <th style="width: 50px;">#</th>
-                                <th>Mã sản phẩm</th>
-                                <th style="text-align: right;">Số lượng dự báo</th>
+                                <th>Tên sản phẩm</th>
+                                <th style="width: 150px;">Category</th>
+                                <th style="text-align: right; width: 120px;">Dự báo</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -753,7 +862,113 @@ def get_notifier(config_path: Optional[str] = None) -> EmailNotifier:
     return EmailNotifier(config_path)
 
 
+def validate_email_config():
+    """
+    Kiểm tra cấu hình email và đưa ra hướng dẫn nếu có lỗi
+    """
+    import os
+    
+    print("=" * 60)
+    print("🔍 EMAIL CONFIGURATION VALIDATION")
+    print("=" * 60)
+    
+    sender = os.getenv('EMAIL_SENDER', '')
+    password = os.getenv('EMAIL_PASSWORD', '')
+    
+    errors = []
+    warnings = []
+    
+    # Check sender
+    if not sender:
+        errors.append("❌ EMAIL_SENDER chưa được cấu hình")
+    elif '@' not in sender:
+        errors.append(f"❌ EMAIL_SENDER không hợp lệ: {sender}")
+    else:
+        print(f"✅ EMAIL_SENDER: {sender}")
+    
+    # Check password
+    if not password:
+        errors.append("❌ EMAIL_PASSWORD chưa được cấu hình")
+    else:
+        # Check password format
+        clean_password = password.replace(' ', '').replace('-', '')
+        if len(clean_password) != 16:
+            warnings.append(f"⚠️ App Password thường có 16 ký tự, hiện tại: {len(clean_password)}")
+        if ' ' in password:
+            warnings.append("⚠️ Password có chứa dấu cách - Gmail App Password không có dấu cách")
+        print(f"✅ EMAIL_PASSWORD: {'*' * len(password)} ({len(password)} chars)")
+    
+    # Check recipients
+    notifier = get_notifier()
+    for report_type in ['training_report', 'forecast_report', 'error_alert']:
+        recipients = notifier._get_recipients(report_type)
+        if recipients:
+            print(f"✅ {report_type} recipients: {recipients}")
+        else:
+            warnings.append(f"⚠️ Không có recipients cho {report_type}")
+    
+    # Print issues
+    if warnings:
+        print("\n⚠️ WARNINGS:")
+        for w in warnings:
+            print(f"   {w}")
+    
+    if errors:
+        print("\n❌ ERRORS:")
+        for e in errors:
+            print(f"   {e}")
+        print("\n📖 HƯỚNG DẪN CẤU HÌNH EMAIL:")
+        print("""
+1. Bật 2-Factor Authentication:
+   - Vào: https://myaccount.google.com/security
+   - Bật "2-Step Verification"
+
+2. Tạo App Password:
+   - Vào: https://myaccount.google.com/apppasswords
+   - Chọn "App" → "Mail"
+   - Chọn "Device" → "Other (Custom name)"
+   - Nhập tên: "ML Pipeline"
+   - Click "Generate"
+   - Copy 16 ký tự (KHÔNG có dấu cách)
+
+3. Cập nhật .env file:
+   EMAIL_SENDER=your-email@gmail.com
+   EMAIL_PASSWORD=xxxxxxxxxxxxxxxx  (16 ký tự, không dấu cách)
+
+4. Test lại:
+   make ml-test-email
+        """)
+        return False
+    
+    # Try to connect to SMTP
+    if sender and password:
+        print("\n📧 Testing SMTP connection...")
+        try:
+            import smtplib
+            server = smtplib.SMTP('smtp.gmail.com', 587, timeout=10)
+            server.starttls()
+            server.login(sender, password)
+            server.quit()
+            print("✅ SMTP connection successful!")
+            return True
+        except Exception as e:
+            print(f"❌ SMTP connection failed: {e}")
+            if 'Username and Password not accepted' in str(e):
+                print("\n💡 Gợi ý:")
+                print("   - Kiểm tra lại App Password (16 ký tự, không dấu cách)")
+                print("   - Đảm bảo đã bật 2-Factor Authentication")
+                print("   - Thử tạo App Password mới tại: https://myaccount.google.com/apppasswords")
+            return False
+    
+    return False
+
+
 if __name__ == '__main__':
+    # Validate first
+    if len(os.sys.argv) > 1 and os.sys.argv[1] == '--validate':
+        validate_email_config()
+        os.sys.exit(0)
+    
     # Test email notifier
     notifier = get_notifier()
     

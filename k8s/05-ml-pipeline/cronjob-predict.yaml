@@ -1,0 +1,51 @@
+# ML Prediction CronJob - Chạy dự báo hàng ngày
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ml-prediction-daily
+  namespace: ml-pipeline
+spec:
+  schedule: "0 6 * * *"  # 6 AM mỗi ngày
+  concurrencyPolicy: Forbid
+  suspend: false
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: ml-prediction
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: ml-prediction
+              image: retail-ml-pipeline:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - /app/xgboost_forecast.py
+                - --mode
+                - predict
+              envFrom:
+                - configMapRef:
+                    name: retail-config
+                - secretRef:
+                    name: retail-secrets
+              resources:
+                requests:
+                  memory: "2Gi"
+                  cpu: "1"
+                limits:
+                  memory: "4Gi"
+                  cpu: "2"
+              volumeMounts:
+                - name: models
+                  mountPath: /app/models
+                  readOnly: true
+          volumes:
+            - name: models
+              persistentVolumeClaim:
+                claimName: ml-models-pvc
+                readOnly: true

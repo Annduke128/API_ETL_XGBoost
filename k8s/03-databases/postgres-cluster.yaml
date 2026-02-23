@@ -1,0 +1,62 @@
+# PostgreSQL HA Cluster sử dụng CloudNativePG
+# Yêu cầu: kubectl apply --server-side -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.22/releases/cnpg-1.22.0.yaml
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: retail-postgres
+  namespace: database
+spec:
+  instances: 2
+  imageName: ghcr.io/cloudnative-pg/postgresql:15.4
+  
+  storage:
+    size: 80Gi
+    storageClass: longhorn-fast
+  
+  # PostgreSQL configuration
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "4GB"
+      effective_cache_size: "12GB"
+      maintenance_work_mem: "512MB"
+      work_mem: "20MB"
+      checkpoint_completion_target: "0.9"
+      wal_buffers: "16MB"
+      default_statistics_target: "100"
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+      
+  # Backup configuration
+  backup:
+    enabled: true
+    retentionPolicy: "30d"
+    barmanObjectStore:
+      destinationPath: "/backups/postgres"
+      data:
+        compression: gzip
+      wal:
+        compression: gzip
+        maxParallel: 2
+      
+  # Monitoring
+  monitoring:
+    enabled: true
+    customQueriesConfigMap:
+      name: cnpg-custom-queries
+      key: queries
+    
+  # Resources
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "1"
+    limits:
+      memory: "8Gi"
+      cpu: "2"
+      
+  # Affinity - đảm bảo pods nằm trên các node khác nhau
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname

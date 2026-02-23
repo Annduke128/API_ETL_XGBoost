@@ -1,7 +1,8 @@
 {{
     config(
         materialized='table',
-        unique_key=['year_month', 'branch_id', 'product_id']
+        engine='MergeTree()',
+        order_by=['year_month', 'branch_id', 'product_id']
     )
 }}
 
@@ -11,8 +12,8 @@ WITH daily_sales AS (
 
 monthly_sales AS (
     SELECT
-        TO_CHAR(transaction_date, 'YYYY-MM') AS year_month,
-        DATE_TRUNC('month', transaction_date)::date AS month_start_date,
+        formatDateTime(transaction_date, '%Y-%m') AS year_month,
+        toStartOfMonth(transaction_date) AS month_start_date,
         
         product_id,
         branch_id,
@@ -28,13 +29,13 @@ monthly_sales AS (
         AVG(avg_selling_price) AS avg_selling_price,
         AVG(profit_margin) AS avg_profit_margin,
         
-        -- So sánh tháng trước (sẽ được tính trong BI layer)
-        CURRENT_TIMESTAMP AS etl_timestamp
+        -- Timestamp
+        now() AS etl_timestamp
         
     FROM daily_sales
     GROUP BY 
-        TO_CHAR(transaction_date, 'YYYY-MM'),
-        DATE_TRUNC('month', transaction_date)::date,
+        formatDateTime(transaction_date, '%Y-%m'),
+        toStartOfMonth(transaction_date),
         product_id,
         branch_id
 )

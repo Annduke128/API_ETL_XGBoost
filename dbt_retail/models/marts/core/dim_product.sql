@@ -1,7 +1,8 @@
 {{
     config(
         materialized='table',
-        unique_key='product_id'
+        engine='MergeTree()',
+        order_by=['product_id']
     )
 }}
 
@@ -45,11 +46,11 @@ dim_product AS (
         COALESCE(pp.total_quantity_sold, 0) AS total_historical_quantity,
         COALESCE(pp.profit_margin, 0) AS historical_profit_margin,
         
-        -- Trạng thái
+        -- Trạng thái (ClickHouse syntax)
         CASE 
             WHEN pp.last_sale_date IS NULL THEN 'New'
-            WHEN pp.last_sale_date >= CURRENT_DATE - INTERVAL '30 days' THEN 'Active'
-            WHEN pp.last_sale_date >= CURRENT_DATE - INTERVAL '90 days' THEN 'Slow Moving'
+            WHEN pp.last_sale_date >= today() - 30 THEN 'Active'
+            WHEN pp.last_sale_date >= today() - 90 THEN 'Slow Moving'
             ELSE 'Inactive'
         END AS product_status,
         

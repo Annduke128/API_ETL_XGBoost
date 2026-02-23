@@ -8,7 +8,6 @@ import logging
 import sys
 import traceback
 from xgboost_forecast import SalesForecaster
-from email_notifier import get_notifier
 
 logging.basicConfig(
     level=logging.INFO,

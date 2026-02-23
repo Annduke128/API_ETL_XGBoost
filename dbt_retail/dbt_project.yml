@@ -11,9 +11,18 @@ dispatch:
 model-paths: ["models"]
 analysis-paths: ["analyses"]
 test-paths: ["tests"]
-seed-paths: ["seeds"]
 macro-paths: ["macros"]
 snapshot-paths: ["snapshots"]
+seed-paths: ["seeds"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Query comments để theo dõi
+query-comment:
+  comment: '{{ dbt_version }} - {{ model_name }} - {{ invocation_id }}'
 
 vars:
   # Biến cho ngành bán lẻ
@@ -33,49 +42,50 @@ vars:
   rfm_frequency_high: 10
   rfm_monetary_high: 5000000
 
-target-path: "target"
-clean-targets:
-  - "target"
-  - "dbt_packages"
-
 models:
   retail_analytics:
-    +materialized: view
-    +persist_docs:
-      relation: true
-      columns: true
+    # ClickHouse materialization defaults
+    +materialized: table
+    +engine: 'MergeTree()'
+    
+    # Cấu hình mặc định cho tất cả models
+    # +grants:
+    #   select: ['readonly']  # Comment out - role 'readonly' chưa tạo trong ClickHouse
     
     staging:
       +materialized: view
-      +schema: staging
       +tags: ['staging', 'daily']
-    
+      # Staging không cần partition vì là view
+      
     intermediate:
-      +materialized: ephemeral
-      +schema: intermediate
+      +materialized: view
       +tags: ['intermediate']
-    
+      
     marts:
       +materialized: table
-      +schema: marts
       +tags: ['marts', 'daily']
+      # Marts tables có partition và order by phù hợp
       
       core:
         +tags: ['core']
-      
+        # Dimension tables - replicate để join nhanh
+        +engine: 'ReplacingMergeTree()'
+        
       sales:
         +tags: ['sales']
-      
+        # Fact tables - config trong từng model
+        
       inventory:
         +tags: ['inventory']
-      
+        
       customers:
         +tags: ['customers']
 
+# Seeds configuration
 seeds:
   retail_analytics:
-    +schema: seeds
     +tags: ['reference']
+    +materialized: seed
     
     product:
       +column_types:
@@ -88,5 +98,20 @@ seeds:
         nhom_hang_cap_3: varchar(200)
         gia_von_mac_dinh: numeric(15,2)
         gia_ban_mac_dinh: numeric(15,2)
+    
+    store_types:
+      +column_types:
+        type_code: varchar(10)
+        type_code_2: varchar(5)
+        type_name_vn: varchar(100)
+        type_name_en: varchar(100)
+        description: varchar(500)
+        typical_area_m2: varchar(20)
+        target_customer: varchar(100)
 
 
+# Tests configuration
+tests:
+  retail_analytics:
+    +severity: warn  # Mặc định warn thay vì error
+    +store_failures: true

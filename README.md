@@ -14,6 +14,10 @@ Hệ thống data pipeline hoàn chỉnh với ETL tự động, Data Warehouse,
 8. [Tùy chỉnh tham số](#tùy-chỉnh-tham-số)
 9. [Kết nối Superset BI](#kết-nối-superset-bi)
 10. [Troubleshooting](#troubleshooting)
+11. [Hệ thống Phân loại Cửa hàng](#hệ-thống-phân-loại-cửa-hàng)
+12. [Phân loại ABC & Quản lý Sản phẩm](#phân-loại-abc--quản-lý-sản-phẩm)
+13. [Email Notification System](#email-notification-system)
+14. [Assortment Analytics](#assortment-analytics)
 
 ---
 
@@ -172,7 +176,7 @@ docker-compose exec -T clickhouse clickhouse-client -q "
 
 ```bash
 # Test ping
-docker-compose exec -T redis redis-cli ping
+docker-compose exec -T redis redis-cli ping #PONG
 
 # Xem keys
 docker-compose exec -T redis redis-cli KEYS "*"
@@ -251,13 +255,15 @@ dbt_retail/
 │   ├── staging/          # Làm sạch dữ liệu gốc
 │   ├── intermediate/     # Transform trung gian
 │   └── marts/            # Facts & Dimensions
-│       ├── core/         # dim_date, dim_product, dim_branch
+│       ├── core/         # dim_date, dim_product, dim_store
 │       ├── sales/        # fct_daily_sales, fct_monthly_sales
 │       ├── inventory/    # fct_inventory_forecast_input
-│       └── customers/    # fct_rfm_analysis
-├── seeds/                # Dữ liệu tham chiếu (product.csv, seasonality)
+│       └── customers/    # fct_rfm_analysis, fct_store_rfm
+├── seeds/                # Dữ liệu tham chiếu (seasonality, holidays)
 └── macros/               # Hàm tiện ích
 ```
+
+**Lưu ý**: `store_types` được lưu trực tiếp trong ClickHouse (không phải seed) để tránh parse errors trong DBT.
 
 ### Các bước chạy DBT:
 
@@ -276,6 +282,9 @@ docker-compose run --rm \
 #### 2. Load seeds (dữ liệu tham chiếu)
 
 ```bash
+make dbt-seed
+
+# Hoặc chạy trực tiếp
 docker-compose run --rm \
   -e POSTGRES_HOST=postgres \
   -e POSTGRES_PORT=5432 \
@@ -285,9 +294,16 @@ docker-compose run --rm \
   dbt seed
 ```
 
+**Seeds hiện tại:**
+- `seasonality_patterns`: Mẫu theo mùa cho forecasting
+- `holiday_calendar`: Lịch ngày lỉ cho feature engineering
+
 #### 3. Chạy tất cả models
 
 ```bash
+make dbt-build
+
+# Hoặc chạy trực tiếp
 docker-compose run --rm \
   -e POSTGRES_HOST=postgres \
   -e POSTGRES_PORT=5432 \
@@ -296,6 +312,8 @@ docker-compose run --rm \
   -e POSTGRES_DB=retail_db \
   dbt run
 ```
+
+**Note**: `dbt-build` tự động chạy `seed` trước `run` để đảm bảo dependencies đúng thứ tự.
 
 #### 4. Chạy specific models
 
@@ -394,16 +412,107 @@ Kiểm tra DAG:
 # Trigger DAG thủ công
 ```
 
-### 3. Xem kết quả dự báo
+### 4. Dự báo với ABC-based Product Selection
+
+Hệ thống sử dụng **Batch Query Optimization** và **ABC Analysis** để dự báo nhanh và chính xác:
+
+```python
+# Dự báo mặc định: Top 5 sản phẩm từ mỗi loại ABC (A, B, C) = 15 sản phẩm
+forecaster.predict_next_week(use_abc_filter=True, abc_top_n=5)
+
+# Dự báo tất cả sản phẩm (chậm hơn)
+forecaster.predict_next_week(use_abc_filter=False)
+```
+
+| Phân loại | Số lượng | Doanh thu | Tốc độ |
+|-----------|----------|-----------|--------|
+| **A** | Top 5 | ~80% tổng doanh thu | ⚡ Rất nhanh |
+| **B** | Top 5 | ~15% tổng doanh thu | ⚡ Rất nhanh |
+| **C** | Top 5 | ~5% tổng doanh thu | ⚡ Rất nhanh |
+| **Tổng** | 15 products | ~95% doanh thu | **~5-10 giây** |
+
+**So sánh tốc độ:**
+| Phương pháp | Số queries | Thờigian | Use case |
+|-------------|-----------|-----------|----------|
+| N+1 Query (cũ) | ~3,900 queries | 5-10 phút | Không khuyến nghị |
+| **Batch Query (mới)** | **2 queries** | **5-10 giây** | **Mặc định** |
+
+### 5. Xem kết quả dự báo
 
 ```bash
 # Trong PostgreSQL
 docker-compose exec -T postgres psql -U retail_user -d retail_db -c "
-  SELECT * FROM ml_forecasts 
-  ORDER BY forecast_date DESC 
-  LIMIT 10;
+  SELECT 
+    forecast_date,
+    chi_nhanh,
+    ma_hang,
+    abc_class,
+    predicted_quantity,
+    predicted_revenue
+  FROM ml_forecasts 
+  ORDER BY forecast_date DESC, abc_class, predicted_quantity DESC
+  LIMIT 20;
+"
+
+# Thống kê theo ABC class
+docker-compose exec -T postgres psql -U retail_user -d retail_db -c "
+  SELECT 
+    abc_class,
+    COUNT(*) as num_forecasts,
+    SUM(predicted_quantity) as total_predicted_qty,
+    SUM(predicted_revenue) as total_predicted_revenue
+  FROM ml_forecasts 
+  WHERE forecast_date >= CURRENT_DATE
+  GROUP BY abc_class
+  ORDER BY abc_class;
 "
 ```
+
+---
+
+## 🛒 Assortment Analytics (Kế hoạch)
+
+Hệ thống đang phát triển module **Assortment Analytics** để tối ưu hóa danh mục sản phẩm theo từng loại cửa hàng:
+
+### Mục tiêu
+
+| Metric | Mô tả | Cách tính |
+|--------|-------|-----------|
+| **Assortment Breadth** | Độ rộng danh mục | Số lượng category/subcategory |
+| **Assortment Depth** | Độ sâu danh mục | SKU count per category |
+| **Space Productivity** | Hiệu quả không gian | Revenue per m² |
+| **Category Role** | Vai trò category | Destination, Routine, Occasional, Convenience |
+
+### Store-type Specific Assortment
+
+Dựa trên **peer group analysis**, mỗi loại cửa hàng sẽ có danh mục tối ưu riêng:
+
+| Store Type | Đặc điểm danh mục | Focus categories |
+|------------|-------------------|------------------|
+| **KPDT (UP)** | Đầy đủ, đa dạng | FMCG đầy đủ, premium products |
+| **KCC (AP)** | Thiết yếu, tiện lợi | Thực phẩm tươi, đồ dùng gia đình |
+| **KCN (IZ)** | Nhanh, tiện dụng | Đồ ăn nhanh, đồ uống, thuốc lá |
+| **CTT (TM)** | Đa dạng, giá rẻ | Hàng khô, hóa mỹ phẩm phổ thông |
+| **KVNT (RL)** | Cơ bản, thiết yếu | Hàng thiết yếu, giá thấp |
+
+### Các chỉ số sẽ triển khai
+
+```sql
+-- Ví dụ: Category performance by store type
+SELECT 
+  st.type_name_vn,
+  p.category_name,
+  COUNT(DISTINCT p.product_id) as sku_count,
+  SUM(f.revenue) as total_revenue,
+  SUM(f.revenue) / st.typical_area_m2 as revenue_per_sqm
+FROM fact_transactions f
+JOIN dim_product p ON f.product_id = p.product_id
+JOIN dim_store s ON f.store_id = s.store_id
+JOIN store_types st ON s.store_type_code = st.type_code
+GROUP BY st.type_name_vn, p.category_name, st.typical_area_m2;
+```
+
+**Trạng thái**: 🚧 Đang phát triển
 
 ---
 
@@ -443,8 +552,8 @@ docker-compose run --rm -e POSTGRES_HOST=postgres dbt run
 ```python
 # retail_data_pipeline/ml_pipeline/xgboost_forecast.py
 
+# ===== TRAINING =====
 # Cách 1: Sử dụng Optuna Tuning (Recommended)
-# Tự động tìm hyperparameters tối ưu
 forecaster.train_all_models(
     use_tuning=True,
     tuning_method='optuna',
@@ -455,16 +564,24 @@ forecaster.train_all_models(
 # Cách 2: Manual hyperparameters (nhanh hơn)
 model = xgb.XGBRegressor(
     objective='reg:squarederror',
-    n_estimators=500,        # Số cây
-    max_depth=6,             # Độ sâu tối đa
-    learning_rate=0.1,       # Tốc độ học
-    subsample=0.8,           # Tỷ lệ mẫu
-    colsample_bytree=0.8,    # Tỷ lệ cột
+    n_estimators=500,
+    max_depth=6,
+    learning_rate=0.1,
+    subsample=0.8,
+    colsample_bytree=0.8,
     random_state=42
 )
 
-# Lead time cho inventory
-lead_time_days = 7
+# ===== PREDICTION =====
+# Dự báo với ABC-based selection (mặc định)
+# Chỉ dự báo Top N sản phẩm từ mỗi loại A, B, C
+forecasts = forecaster.predict_next_week(
+    use_abc_filter=True,   # Bật ABC filtering
+    abc_top_n=5            # Top 5 từ mỗi loại = 15 sản phẩm
+)
+
+# Dự báo tất cả sản phẩm (chậm, chỉ khi cần)
+forecasts = forecaster.predict_next_week(use_abc_filter=False)
 ```
 
 ### 3. Tham số CSV Processor
@@ -648,14 +765,31 @@ make up                 # Khởi động tất cả services
 make down               # Dừng services
 make restart            # Restart
 make logs               # Xem logs
+
+# Data Processing
 make csv-import         # Import CSV thủ công
 make csv-process-full   # Import CSV + DBT transform
-make dbt                # Chạy DBT
-make ml                 # Train ML (Optuna 50 trials)
+
+# DBT
+make dbt-deps           # Cài đặt DBT dependencies
+make dbt-seed           # Load seeds
+make dbt-build          # Build models (seed + run)
+make dbt-test           # Chạy tests
+
+# ML Pipeline
+make ml-train           # Train ML với Optuna (50 trials)
 make ml-train-fast      # Train ML nhanh (no tuning)
+make ml-train-optimal   # Train ML tối ưu (100 trials)
 make ml-predict         # Generate forecasts
+make ml-train-predict   # Train + Predict
+
+# Database CLI
 make psql               # Vào PostgreSQL CLI
 make clickhouse         # Vào ClickHouse CLI
+
+# Utilities
+make clean              # Dọn dẹp containers, volumes
+make prune              # Dọn dẹp Docker system
 ```
 
 ### Kiểm tra nhanh
@@ -670,10 +804,137 @@ curl http://localhost:8088/health
 
 ---
 
+
+
+## 🏪 Hệ thống Phân loại Cửa hàng
+
+### 5 Loại cửa hàng (Store Types)
+
+Hệ thống phân loại cửa hàng theo **peer group** để so sánh hiệu suất tương đồng trong phân tích RFM:
+
+| Mã loại | Peer Group | Tên tiếng Việt | Tên tiếng Anh | Đặc điểm |
+|---------|------------|----------------|---------------|----------|
+| **KPDT** | UP | Khu phố đô thị | Urban Precinct | Khu dân cư đô thị, lưu lượng khách ổn định |
+| **KCC** | AP | Khu chung cư | Apartment Precinct | Tập trung cư dân, nhu cầu thiết yếu cao |
+| **KCN** | IZ | Khu công nghiệp | Industrial Zone | Gần nhà máy, giờ cao điểm theo ca làm việc |
+| **CTT** | TM | Chợ truyền thống | Traditional Market | Chợ đầu mối, khách hàng đa dạng |
+| **KVNT** | RL | Khu vực nông thôn | Rural Location | Vùng sâu vùng xa, nhu cầu cơ bản |
+
+### Store RFM Segments
+
+Phân tích RFM được áp dụng cho từng **peer group** riêng biệt, đảm bảo so sánh công bằng giữa các cửa hàng cùng loại:
+
+| Segment | Tên gọi | Đặc điểm | Chiến lược |
+|---------|---------|----------|------------|
+| **Star Stores** | Cửa hàng ngôi sao | R cao, F cao, M cao | Mở rộng, đầu tư thêm |
+| **Cash Cows** | Bò sữa | R thấp, F cao, M cao | Duy trì, tối ưu chi phí |
+| **Fading Stars** | Sao tàn | R cao, F cao, M thấp | Đánh giá lại vị trí |
+| **Hidden Gems** | Viên ngọc ẩn | R cao, F thấp, M cao | Marketing, tăng tần suất |
+| **Sleeping Giants** | Ngưỡng khổng lồ | R thấp, F thấp, M cao | Kích hoạt lại |
+| **Underperformers** | Kém hiệu quả | R thấp, F thấp, M thấp | Xem xét đóng cửa |
+
+**Lưu ý**: Store RFM yêu cầu tối thiểu **3 cửa hàng** trong cùng peer group để tính toán percentile chính xác.
+
+---
+
+## 📊 Phân loại ABC & Quản lý Sản phẩm
+
+### ABC Classification Logic
+
+Phân loại ABC dựa trên **cumulative revenue percentile**:
+
+| Class | Phân vị doanh thu | Đặc điểm | Tỷ lệ tập trung |
+|-------|-------------------|----------|-----------------|
+| **A** | Top 80% | Sản phẩm chủ lực | ~80% doanh thu từ ~20% SKU |
+| **B** | 80% - 95% | Sản phẩm trung bình | ~15% doanh thu từ ~30% SKU |
+| **C** | Còn lại | Sản phẩm ít quan trọng | ~5% doanh thu từ ~50% SKU |
+
+### Recalculation Workflow
+
+Khi dữ liệu mới được import, chạy lại phân loại ABC:
+
+```bash
+# Kiểm tra phân phối hiện tại
+docker-compose exec -T clickhouse clickhouse-client -q "
+  SELECT abc_class, COUNT(*) as num_products
+  FROM retail_dw.dim_product
+  GROUP BY abc_class
+  ORDER BY abc_class;
+"
+
+# Recalculate ABC (chạy script)
+cd /home/annduke/retail_data_pipeline
+./scripts/recalculate_abc.sh
+```
+
+### Product Variant Parsing
+
+Hệ thống tự động phân tích tên sản phẩm để trích xuất:
+- **Base Product**: Tên gốc (ví dụ: "Nước rửa chén Sunlight")
+- **Variant**: Thông tin biến thể (ví dụ: "Chanh 3.6kg")
+- **Pack Hierarchy**: Quy cách đóng gói (ví dụ: "Thùng 4 chai")
+
+**Ví dụ phân tích**:
+| Tên gốc | Base Product | Variant | Pack |
+|---------|--------------|---------|------|
+| Nước rửa chén Sunlight Chanh 3.6kg Thùng 4 chai | Nước rửa chén Sunlight | Chanh 3.6kg | Thùng 4 chai |
+| Nước giặt Omo Matic Cửa trước 3.7kg Túi | Nước giặt Omo Matic Cửa trước | 3.7kg | Túi |
+
+---
+
+## 📧 Email Notification System
+
+Hệ thống tự động gửi email thông báo cho các sự kiện ML Pipeline:
+
+### Các loại thông báo
+
+| Loại | Trigger | Nội dung |
+|------|---------|----------|
+| **ML Training Success** | Hoàn thành training | Tổng thởigian, MAE trung bình, số lỗi |
+| **ML Training Failure** | Lỗi trong quá trình training | Chi tiết lỗi, traceback |
+| **ML Prediction Success** | Hoàn thành dự báo | Số sản phẩm dự báo, tổng doanh thu dự báo |
+| **ML Prediction Failure** | Lỗi trong quá trình dự báo | Chi tiết lỗi |
+
+### Cấu hình SMTP
+
+Thiết lập trong file `.env`:
+
+```bash
+# SMTP Configuration
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your-email@gmail.com
+SMTP_PASSWORD=your-app-password
+SMTP_USE_TLS=true
+
+# Recipients
+NOTIFICATION_RECIPIENTS=admin1@company.com,admin2@company.com
+```
+
+---
+
+## 📝 Changelog
+
+### 2026-02-23 - Store Classification & Email Notifications
+- **Store Types**: Triển khai 5 loại cửa hàng với peer group codes (UP, AP, IZ, TM, RL)
+- **Store RFM Strategy**: Định nghĩa 6 phân khúc cửa hàng (Star, Cash Cow, Fading, etc.)
+- **Email Notifications**: Tích hợp thông báo email cho ML Pipeline (training/prediction)
+- **ABC Recalculation**: Workflow tự động tính toán lại phân loại ABC
+- **Store Types Migration**: Chuyển từ DBT seed sang ClickHouse table để tránh parse errors
+- **Product Variant Parser**: Phân tích tự động tên sản phẩm thành base/variant/pack
+
+### 2024-02-14 - ML Prediction Optimization
+- **Batch Query**: Tối ưu từ N+1 queries → 2 queries (~100x nhanh hơn)
+- **ABC-based Selection**: Dự báo Top 5 A + Top 5 B + Top 5 C = 15 sản phẩm (~95% doanh thu)
+- **Adaptive Lag Features**: Tự động điều chỉnh lag dựa trên số ngày dữ liệu có sẵn
+
+
 ## 📄 License
 
 MIT License
 
 ---
 
-**Last Updated:** 2024-02-14
+**Last Updated:** 2026-02-23
+
+---

@@ -6,11 +6,11 @@
 }}
 
 WITH source AS (
-    SELECT * FROM {{ source('retail_source', 'transactions') }}
+    SELECT * FROM {{ source('retail_source', 'staging_transactions') }}
 ),
 
 branches AS (
-    SELECT * FROM {{ source('retail_source', 'branches') }}
+    SELECT * FROM {{ source('retail_source', 'staging_branches') }}
 ),
 
 renamed AS (
@@ -21,11 +21,11 @@ renamed AS (
         b.ma_chi_nhanh AS branch_code,
         b.ten_chi_nhanh AS branch_name,
         t.thoi_gian AS transaction_timestamp,
-        DATE(t.thoi_gian) AS transaction_date,
-        EXTRACT(YEAR FROM t.thoi_gian) AS year,
-        EXTRACT(MONTH FROM t.thoi_gian) AS month,
-        EXTRACT(DOW FROM t.thoi_gian) AS day_of_week,
-        EXTRACT(HOUR FROM t.thoi_gian) AS hour_of_day,
+        toDate(t.thoi_gian) AS transaction_date,
+        toYear(t.thoi_gian) AS year,
+        toMonth(t.thoi_gian) AS month,
+        toDayOfWeek(t.thoi_gian) AS day_of_week,
+        toHour(t.thoi_gian) AS hour_of_day,
         
         -- Tài chính
         t.tong_tien_hang AS gross_amount,

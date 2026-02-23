@@ -1,0 +1,65 @@
+# Job chạy một lần để tạo database và user cho Airflow
+# Chạy: kubectl apply -f job-db-migration.yaml
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-setup
+  namespace: database
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: postgres-client
+          image: postgres:15-alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Creating databases and users..."
+              
+              # Đợi PostgreSQL sẵn sàng
+              until pg_isready -h retail-postgres-rw -p 5432; do
+                echo "Waiting for postgres..."
+                sleep 2
+              done
+              
+              # Lấy password từ secret
+              PGPASSWORD=$(cat /secrets/password) psql -h retail-postgres-rw -U postgres -d postgres <<EOF
+              -- Create retail_db
+              CREATE DATABASE IF NOT EXISTS retail_db;
+              \c retail_db;
+              CREATE TABLE IF NOT EXISTS ml_forecasts (
+                  id SERIAL PRIMARY KEY,
+                  forecast_date DATE NOT NULL,
+                  ma_hang VARCHAR(50) NOT NULL,
+                  predicted_quantity FLOAT,
+                  predicted_revenue FLOAT,
+                  created_at TIMESTAMP DEFAULT NOW()
+              );
+              
+              -- Create airflow_db
+              CREATE DATABASE IF NOT EXISTS airflow_db;
+              GRANT ALL PRIVILEGES ON DATABASE airflow_db TO retail_user;
+              
+              -- Create superset_db
+              CREATE DATABASE IF NOT EXISTS superset_db;
+              GRANT ALL PRIVILEGES ON DATABASE superset_db TO retail_user;
+              EOF
+              
+              echo "Database setup complete!"
+          env:
+            - name: PGUSER
+              value: "postgres"
+          volumeMounts:
+            - name: postgres-secret
+              mountPath: /secrets
+              readOnly: true
+      volumes:
+        - name: postgres-secret
+          secret:
+            secretName: retail-postgres-superuser
+            items:
+              - key: password
+                path: password

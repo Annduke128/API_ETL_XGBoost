@@ -1,0 +1,72 @@
+# ClickHouse Cluster cho K3s
+# Yêu cầu: cài đặt ClickHouse Operator trước
+
+apiVersion: "clickhouse.altinity.com/v1"
+kind: "ClickHouseInstallation"
+metadata:
+  name: "retail-clickhouse"
+  namespace: database
+spec:
+  configuration:
+    clusters:
+      - name: "cluster"
+        layout:
+          shardsCount: 2
+          replicasCount: 1
+        templates:
+          podTemplate: clickhouse-stable
+          volumeClaimTemplate: clickhouse-storage
+    
+    users:
+      default/password: clickhouse_password
+      default/networks/ip: "::/0"
+      
+    profiles:
+      default/max_memory_usage: "8589934592"  # 8GB
+      default/max_bytes_before_external_group_by: "4294967296"  # 4GB
+      default/max_threads: "4"
+      
+    settings:
+      format_csv_delimiter: ","
+      
+  templates:
+    podTemplates:
+      - name: clickhouse-stable
+        spec:
+          containers:
+            - name: clickhouse
+              image: clickhouse/clickhouse-server:24.3-alpine
+              resources:
+                requests:
+                  memory: "4Gi"
+                  cpu: "2"
+                limits:
+                  memory: "8Gi"
+                  cpu: "4"
+              volumeMounts:
+                - name: clickhouse-storage
+                  mountPath: /var/lib/clickhouse
+              # Liveness probe
+              livenessProbe:
+                httpGet:
+                  path: /ping
+                  port: 8123
+                initialDelaySeconds: 30
+                periodSeconds: 30
+              # Readiness probe
+              readinessProbe:
+                httpGet:
+                  path: /ping
+                  port: 8123
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                  
+    volumeClaimTemplates:
+      - name: clickhouse-storage
+        spec:
+          storageClassName: longhorn-fast
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 100Gi

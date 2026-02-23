@@ -19,7 +19,7 @@ rfm_base AS (
         customer_id,
         
         -- Recency: Số ngày kể từ lần mua cuối
-        CURRENT_DATE - MAX(transaction_date) AS recency_days,
+        dateDiff('day', MAX(transaction_date), today()) AS recency_days,
         
         -- Frequency: Số lần mua
         COUNT(DISTINCT transaction_date) AS frequency,
@@ -32,7 +32,7 @@ rfm_base AS (
         SUM(gross_profit) AS total_profit
         
     FROM customer_base
-    WHERE transaction_date >= CURRENT_DATE - INTERVAL '365 days'
+    WHERE transaction_date >= today() - 365
     GROUP BY customer_id
 ),
 
@@ -118,7 +118,7 @@ rfm_segmented AS (
             ELSE 'Ignore'
         END AS recommended_action,
         
-        CURRENT_TIMESTAMP AS etl_timestamp
+        now() AS etl_timestamp
         
     FROM rfm_scored
 )

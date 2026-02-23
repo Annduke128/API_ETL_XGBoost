@@ -24,8 +24,8 @@ current_period AS (
         AVG(profit_margin) AS avg_margin
     FROM daily_sales ds
     JOIN date_dim d ON ds.date_key = d.date_key
-    WHERE d.year = EXTRACT(YEAR FROM CURRENT_DATE)
-      AND d.month = EXTRACT(MONTH FROM CURRENT_DATE)
+    WHERE d.year = toYear(today())
+      AND d.month = toMonth(today())
 ),
 
 previous_period AS (
@@ -38,8 +38,8 @@ previous_period AS (
         AVG(profit_margin) AS avg_margin
     FROM daily_sales ds
     JOIN date_dim d ON ds.date_key = d.date_key
-    WHERE d.year = EXTRACT(YEAR FROM CURRENT_DATE - INTERVAL '1 month')
-      AND d.month = EXTRACT(MONTH FROM CURRENT_DATE - INTERVAL '1 month')
+    WHERE d.year = toYear(today() - toIntervalMonth(1))
+      AND d.month = toMonth(today() - toIntervalMonth(1))
 ),
 
 ytd AS (
@@ -52,8 +52,8 @@ ytd AS (
         AVG(profit_margin) AS avg_margin
     FROM daily_sales ds
     JOIN date_dim d ON ds.date_key = d.date_key
-    WHERE d.year = EXTRACT(YEAR FROM CURRENT_DATE)
-      AND d.full_date <= CURRENT_DATE
+    WHERE d.year = toYear(today())
+      AND d.full_date <= today()
 ),
 
 kpi_summary AS (
@@ -76,6 +76,6 @@ SELECT
     CASE WHEN transactions > 0 THEN revenue / transactions ELSE 0 END AS avg_transaction_value,
     CASE WHEN quantity > 0 THEN revenue / quantity ELSE 0 END AS avg_unit_price,
     
-    CURRENT_TIMESTAMP AS report_timestamp
+    now() AS report_timestamp
     
 FROM kpi_summary

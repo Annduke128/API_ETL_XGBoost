@@ -34,28 +34,31 @@ with DAG(
     tags=['csv', 'import', 'daily'],
 ) as dag:
 
-    # Task 1: Kiểm tra có file CSV cần xử lý không
+    # Task 1: Kiểm tra có file cần xử lý không (CSV hoặc Excel)
     check_csv_files = BashOperator(
         task_id='check_csv_files',
         bash_command='''
-            COUNT=$(ls -1 /opt/airflow/csv_input/*.csv 2>/dev/null | wc -l)
-            if [ $COUNT -eq 0 ]; then
-                echo "No CSV files found"
+            CSV_COUNT=$(ls -1 /opt/airflow/csv_input/*.csv 2>/dev/null | wc -l)
+            XLSX_COUNT=$(ls -1 /opt/airflow/csv_input/*.xlsx 2>/dev/null | wc -l)
+            XLS_COUNT=$(ls -1 /opt/airflow/csv_input/*.xls 2>/dev/null | wc -l)
+            TOTAL_COUNT=$((CSV_COUNT + XLSX_COUNT + XLS_COUNT))
+            if [ $TOTAL_COUNT -eq 0 ]; then
+                echo "No files found"
                 exit 0
             else
-                echo "Found $COUNT CSV files"
+                echo "Found $TOTAL_COUNT files (CSV: $CSV_COUNT, XLSX: $XLSX_COUNT, XLS: $XLS_COUNT)"
                 exit 0
             fi
         ''',
     )
 
-    # Task 2: Process CSV files
-    process_csv = DockerOperator(
-        task_id='process_csv_files',
-        image='retail_csv_processor:latest',
+    # Task 2: Process files (CSV & Excel)
+    process_files = DockerOperator(
+        task_id='process_files',
+        image='retail_sync_tool:latest',
         api_version='auto',
         auto_remove=True,
-        command='python auto_process_csv.py --input /csv_input --output /csv_output',
+        command='python auto_process_files.py --input /csv_input --output /csv_output',
         docker_url='unix://var/run/docker.sock',
         network_mode='retail_network',
         mounts=[
@@ -91,4 +94,4 @@ with DAG(
     )
 
     # Dependencies
-    check_csv_files >> process_csv >> dbt_transform >> notify_completion
+    check_csv_files >> process_files >> dbt_transform >> notify_completion

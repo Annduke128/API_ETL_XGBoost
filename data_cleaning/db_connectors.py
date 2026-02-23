@@ -15,9 +15,16 @@ logger = logging.getLogger(__name__)
 class PostgreSQLConnector:
     """Connector cho PostgreSQL (OLTP Database)"""
     
-    def __init__(self, host: str = 'localhost', port: int = 5432,
-                 database: str = 'retail_db', user: str = 'postgres',
-                 password: str = 'password'):
+    def __init__(self, host: str = None, port: int = None,
+                 database: str = None, user: str = None,
+                 password: str = None):
+        # Lấy từ env vars nếu không được truyền
+        import os
+        host = host or os.getenv('POSTGRES_HOST', 'postgres')
+        port = port or int(os.getenv('POSTGRES_PORT', '5432'))
+        database = database or os.getenv('POSTGRES_DB', 'retail_db')
+        user = user or os.getenv('POSTGRES_USER', 'retail_user')
+        password = password or os.getenv('POSTGRES_PASSWORD', 'retail_password')
         self.connection_string = (
             f"postgresql://{user}:{password}@{host}:{port}/{database}"
         )
@@ -148,7 +155,7 @@ class PostgreSQLConnector:
             logger.info(f"Inserted/Updated {len(products_df)} products")
             
             # 3. Insert transactions
-            transactions_df = df[['ma_giao_dich', 'chi_nhanh', 'thoi_gian', 
+            transactions_df = df[['ma_giao_dich', 'chi_nhanh', 'thoi_gian_theo_giao_dich', 
                                  'tong_tien_hang_theo_thoi_gian', 'giam_gia_theo_thoi_gian',
                                  'doanh_thu_theo_thoi_gian', 'tong_gia_von_theo_thoi_gian',
                                  'loi_nhuan_gop_theo_thoi_gian']].drop_duplicates('ma_giao_dich')
@@ -171,7 +178,7 @@ class PostgreSQLConnector:
                     """), {
                         'ma_gd': row['ma_giao_dich'],
                         'branch_id': branch_id,
-                        'thoi_gian': row['thoi_gian'],
+                        'thoi_gian': row['thoi_gian_theo_giao_dich'],
                         'tong_tien': row['tong_tien_hang_theo_thoi_gian'],
                         'giam_gia': row['giam_gia_theo_thoi_gian'],
                         'doanh_thu': row['doanh_thu_theo_thoi_gian'],
@@ -222,9 +229,16 @@ class PostgreSQLConnector:
 class ClickHouseConnector:
     """Connector cho ClickHouse (Data Warehouse)"""
     
-    def __init__(self, host: str = 'localhost', port: int = 9000,
-                 database: str = 'retail_dw', user: str = 'default',
-                 password: str = ''):
+    def __init__(self, host: str = None, port: int = None,
+                 database: str = None, user: str = None,
+                 password: str = None):
+        # Lấy từ env vars nếu không được truyền
+        import os
+        host = host or os.getenv('CLICKHOUSE_HOST', 'clickhouse')
+        port = port or int(os.getenv('CLICKHOUSE_PORT', '9000'))
+        database = database or os.getenv('CLICKHOUSE_DB', 'retail_dw')
+        user = user or os.getenv('CLICKHOUSE_USER', 'default')
+        password = password or os.getenv('CLICKHOUSE_PASSWORD', 'clickhouse_password')
         self.client = ClickHouseClient(
             host=host,
             port=port,

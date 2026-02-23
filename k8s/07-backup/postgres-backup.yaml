@@ -1,0 +1,74 @@
+# PostgreSQL Backup CronJob
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: database
+spec:
+  schedule: "0 */6 * * *"  # Every 6 hours
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: postgres:15-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Starting backup at $(date)"
+                  
+                  BACKUP_FILE="/backups/retail_db_$(date +%Y%m%d_%H%M%S).sql.gz"
+                  
+                  # Backup với compression
+                  PGPASSWORD=$POSTGRES_PASSWORD pg_dump \
+                    -h retail-postgres-rw \
+                    -U $POSTGRES_USER \
+                    -d $POSTGRES_DB \
+                    --verbose \
+                    --format=custom \
+                    | gzip > $BACKUP_FILE
+                  
+                  echo "Backup completed: $BACKUP_FILE"
+                  ls -lh $BACKUP_FILE
+                  
+                  # Cleanup old backups (keep last 20)
+                  ls -t /backups/*.sql.gz | tail -n +21 | xargs rm -f || true
+                  
+                  echo "Cleanup completed"
+                  echo "Remaining backups:"
+                  ls -la /backups/
+              env:
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: retail-secrets
+                      key: POSTGRES_USER
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: retail-secrets
+                      key: POSTGRES_PASSWORD
+                - name: POSTGRES_DB
+                  value: "retail_db"
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+          volumes:
+            - name: backups
+              hostPath:
+                path: /mnt/nfs/backups/postgres
+                type: DirectoryOrCreate

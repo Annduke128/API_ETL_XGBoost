@@ -1,0 +1,38 @@
+# DBT Ignore - Files không cần thiết cho DBT parse
+# Giúp DBT parse nhanh hơn
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation không liên quan
+docs/
+*.md
+!README.md
+
+# Data files
+*.csv
+*.json
+*.parquet

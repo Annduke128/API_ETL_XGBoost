@@ -78,18 +78,30 @@ services:
       - retail_network
 
   # ============================================
-  # DBT - Data Transformation
+  # DBT - Data Transformation (ClickHouse)
   # ============================================
   dbt:
-    image: ghcr.io/dbt-labs/dbt-postgres:1.7.0
+    build:
+      context: ./dbt_retail
+      dockerfile: Dockerfile
     container_name: retail_dbt
     environment:
       DBT_PROFILES_DIR: /root/.dbt
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: retail_user
+      POSTGRES_PASSWORD: retail_password
+      POSTGRES_DB: retail_db
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse_password
+      CLICKHOUSE_DB: retail_dw
     volumes:
       - ./dbt_retail:/usr/app/dbt
       - ./dbt_retail/profiles.yml:/root/.dbt/profiles.yml
     working_dir: /usr/app/dbt
-    command: ["run", "--profiles-dir", "/root/.dbt"]
+    command: ["run", "--profiles-dir", "/root/.dbt", "--target", "clickhouse"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,6 +109,8 @@ services:
         condition: service_healthy
     networks:
       - retail_network
+    profiles:
+      - donotstart  # Không tự động start, chỉ chạy khi gọi explicitly
 
   # ============================================
   # Airflow - Scheduler
@@ -293,6 +307,7 @@ services:
       POSTGRES_USER: retail_user
       POSTGRES_PASSWORD: retail_password
       CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse_password
       REDIS_HOST: redis
       # Email Configuration - Lấy từ .env file
       EMAIL_SENDER: ${EMAIL_SENDER:-ml-pipeline@company.com}
@@ -314,18 +329,21 @@ services:
       - ml
 
   # ============================================
-  # File Watcher - Auto process CSV
+  # Sync Tool - Batch Sync PostgreSQL to ClickHouse
   # ============================================
-  csv-watcher:
+  sync-tool:
     build:
       context: ./data_cleaning
       dockerfile: Dockerfile
-    container_name: retail_csv_watcher
+    container_name: retail_sync_tool
     environment:
       REDIS_HOST: redis
       POSTGRES_HOST: postgres
       CLICKHOUSE_HOST: clickhouse
-      WATCH_DIR: /csv_input
+      POSTGRES_DB: retail_db
+      POSTGRES_USER: retail_user
+      POSTGRES_PASSWORD: retail_password
+      CLICKHOUSE_DB: retail_dw
     volumes:
       - ./csv_input:/csv_input
       - ./csv_output:/csv_output
@@ -336,9 +354,8 @@ services:
     networks:
       - retail_network
     profiles:
-      - watcher
-    # Override default to run one-time instead of continuous
-    # command: ["python", "auto_process_csv.py", "--input", "/csv_input", "--output", "/csv_output"]
+      - sync
+    # No default command - must specify script to run
 
 volumes:
   redis_data:

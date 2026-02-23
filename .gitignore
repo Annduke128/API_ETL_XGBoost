@@ -219,3 +219,18 @@ SESSION_SUMMARY.md
 # Temp processing files
 /tmp/
 temp/
+
+# Markdown files (except README.md and PIPELINE_MAP.md)
+*.md
+*.MD
+!README.md
+!PIPELINE_MAP.md
+
+# CSV files in csv_input (except sample files)
+csv_input/*.csv
+edge_cases_inventory.csv
+product_edge_cases_inventory.csv
+
+# Zone.Identifier files (Windows WSL)
+*.Zone.Identifier
+*:Zone.Identifier

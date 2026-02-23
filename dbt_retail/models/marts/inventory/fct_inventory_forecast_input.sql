@@ -19,9 +19,9 @@ inventory_stats AS (
         
         -- Thống kê bán hàng
         AVG(units_sold) AS avg_daily_sales,
-        STDDEV(units_sold) AS std_daily_sales,
+        stddevPop(units_sold) AS std_daily_sales,
         MAX(units_sold) AS max_daily_sales,
-        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY units_sold) AS p95_daily_sales,
+        quantile(0.95)(units_sold) AS p95_daily_sales,
         
         -- Doanh thu
         AVG(revenue) AS avg_daily_revenue,
@@ -36,7 +36,7 @@ inventory_stats AS (
         SUM(units_sold)::FLOAT / NULLIF(COUNT(DISTINCT transaction_date), 0) AS sales_velocity
         
     FROM daily_movement
-    WHERE transaction_date >= CURRENT_DATE - INTERVAL '90 days'
+    WHERE transaction_date >= today() - toIntervalDay(90)
     GROUP BY product_code, product_name, brand, category_l1
 ),
 
@@ -70,7 +70,7 @@ forecast_input AS (
             ELSE 'Erratic'
         END AS demand_pattern,
         
-        CURRENT_TIMESTAMP AS etl_timestamp
+        now() AS etl_timestamp
         
     FROM inventory_stats
 )

@@ -17,8 +17,13 @@ logger = logging.getLogger(__name__)
 class RedisBuffer:
     """Redis buffer cho data pipeline"""
     
-    def __init__(self, host: str = 'localhost', port: int = 6379, 
+    def __init__(self, host: str = None, port: int = None, 
                  db: int = 0, password: Optional[str] = None):
+        # Lấy từ env vars nếu không được truyền
+        import os
+        host = host or os.getenv('REDIS_HOST', 'redis')
+        port = port or int(os.getenv('REDIS_PORT', '6379'))
+        password = password or os.getenv('REDIS_PASSWORD')
         self.client = redis.Redis(
             host=host,
             port=port,
@@ -168,6 +173,11 @@ class RedisBuffer:
         key = self._make_key(f"dedup:{hashlib.md5(key_value.encode()).hexdigest()}")
         return self.client.exists(key) > 0
     
+    def set_duplicate(self, key_value: str, expire: int = 86400):
+        """Đánh dấu key là duplicate đã xử lý"""
+        self.cache_dedup_key(key_value, expire)
+        logger.debug(f"Marked as duplicate: {key_value[:16]}...")
+    
     def clear_all(self, pattern: str = "*"):
         """Xóa tất cả key theo pattern"""
         full_pattern = self._make_key(pattern)
@@ -188,7 +198,13 @@ class RedisBuffer:
 # Singleton instance
 _buffer = None
 
-def get_buffer(host: str = 'localhost', port: int = 6379) -> RedisBuffer:
+def get_buffer(host: str = None, port: int = None) -> RedisBuffer:
+    """Lấy RedisBuffer instance (singleton)
+    
+    Args:
+        host: Redis host (default: lấy từ REDIS_HOST env var hoặc 'redis')
+        port: Redis port (default: lấy từ REDIS_PORT env var hoặc 6379)
+    """
     """Lấy RedisBuffer instance (singleton)"""
     global _buffer
     if _buffer is None:

@@ -5,15 +5,15 @@
 }}
 
 WITH source AS (
-    SELECT * FROM {{ source('retail_source', 'transaction_details') }}
+    SELECT * FROM {{ source('retail_source', 'staging_transaction_details') }}
 ),
 
 transactions AS (
-    SELECT * FROM {{ source('retail_source', 'transactions') }}
+    SELECT * FROM {{ source('retail_source', 'staging_transactions') }}
 ),
 
 products AS (
-    SELECT * FROM {{ source('retail_source', 'products') }}
+    SELECT * FROM {{ source('retail_source', 'staging_products') }}
 ),
 
 renamed AS (
@@ -22,7 +22,7 @@ renamed AS (
         td.giao_dich_id AS transaction_id,
         t.ma_giao_dich,
         t.thoi_gian AS transaction_timestamp,
-        DATE(t.thoi_gian) AS transaction_date,
+        toDate(t.thoi_gian) AS transaction_date,
         
         td.product_id,
         p.ma_hang AS product_code,

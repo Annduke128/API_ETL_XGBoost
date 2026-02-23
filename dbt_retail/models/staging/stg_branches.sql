@@ -5,7 +5,7 @@
 }}
 
 WITH source AS (
-    SELECT * FROM {{ source('retail_source', 'branches') }}
+    SELECT * FROM {{ source('retail_source', 'staging_branches') }}
 ),
 
 renamed AS (

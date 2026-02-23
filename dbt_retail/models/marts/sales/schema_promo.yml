@@ -1,0 +1,48 @@
+version: 2
+
+models:
+  - name: fct_regular_sales
+    description: >
+      Doanh số THƯỜNG (không khuyến mại) - Dùng để train ML model cho baseline demand prediction.
+      Loại bỏ các sản phẩm category 'Khuyến mại%' để tránh làm méo pattern nhu cầu thường ngày.
+    columns:
+      - name: transaction_date
+        description: Ngày giao dịch
+        tests:
+          - not_null
+      - name: product_code
+        description: Mã sản phẩm
+        tests:
+          - not_null
+      - name: quantity_sold
+        description: Số lượng bán
+      - name: gross_revenue
+        description: Doanh thu gộp
+      - name: is_promotional_sale
+        description: Flag = 0 (regular sale)
+      - name: sale_type
+        description: Loại sale = 'regular'
+
+  - name: fct_promotional_sales
+    description: >
+      Doanh số KHUYẾN MẠI - Dùng để train ML model riêng cho promotion demand prediction.
+      Các sản phẩm này có pattern khác biệt so với baseline, cần xử lý riêng.
+    columns:
+      - name: transaction_date
+        description: Ngày giao dịch
+        tests:
+          - not_null
+      - name: product_code
+        description: Mã sản phẩm khuyến mại
+        tests:
+          - not_null
+      - name: promotion_category
+        description: Category khuyến mại (VD 'Khuyến mại khai chương')
+      - name: promotion_subcategory
+        description: Subcategory khuyến mại
+      - name: quantity_sold
+        description: Số lượng bán trong đợt KM
+      - name: is_promotional_sale
+        description: Flag = 1 (promotional sale)
+      - name: sale_type
+        description: Loại sale = 'promotional'

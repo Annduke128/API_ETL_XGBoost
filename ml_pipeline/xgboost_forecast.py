@@ -5,7 +5,7 @@ Sử dụng Optuna cho hyperparameter tuning
 
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, List, Tuple, Optional, Any
 import logging
 import joblib
@@ -16,6 +16,18 @@ import warnings
 import xgboost as xgb
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
+
+def median_absolute_percentage_error(y_true, y_pred):
+    """MdAPE - Median Absolute Percentage Error, ít nhạy cảm với outliers hơn MAPE
+    
+    Filter out zeros để tránh division by zero.
+    """
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    mask = y_true > 0
+    if mask.sum() == 0:
+        return np.nan
+    return np.median(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
 
 # Optuna cho Bayesian Optimization
 try:
@@ -41,17 +53,17 @@ class SalesForecaster:
         os.makedirs(model_dir, exist_ok=True)
         
         self.pg = PostgreSQLConnector(
-            host=os.getenv('POSTGRES_HOST', 'localhost'),
-            database=os.getenv('POSTGRES_DB', 'retail_db'),
-            user=os.getenv('POSTGRES_USER', 'retail_user'),
-            password=os.getenv('POSTGRES_PASSWORD', 'retail_password')
+            host=os.getenv('POSTGRES_HOST'),
+            database=os.getenv('POSTGRES_DB'),
+            user=os.getenv('POSTGRES_USER'),
+            password=os.getenv('POSTGRES_PASSWORD')
         )
         
         self.ch = ClickHouseConnector(
-            host=os.getenv('CLICKHOUSE_HOST', 'localhost'),
+            host=os.getenv('CLICKHOUSE_HOST', 'clickhouse'),
             database=os.getenv('CLICKHOUSE_DB', 'retail_dw'),
             user=os.getenv('CLICKHOUSE_USER', 'default'),
-            password=os.getenv('CLICKHOUSE_PASSWORD', 'clickhouse_password')
+            password=os.getenv('CLICKHOUSE_PASSWORD', '')
         )
         
         self.models = {}
@@ -68,44 +80,209 @@ class SalesForecaster:
                 logger.warning(f"⚠️ Không thể khởi tạo email notifier: {e}")
         self.feature_cols = []  # Sẽ được cập nhật động sau khi create_features
     
-    def load_historical_data(self, days: int = 365) -> pd.DataFrame:
-        """Load dữ liệu lịch sử từ ClickHouse"""
-        query = f"""
-        SELECT
-            ngay,
-            chi_nhanh,
-            ma_hang,
-            nhom_hang_cap_1,
-            nhom_hang_cap_2,
-            SUM(doanh_thu) as daily_revenue,
-            SUM(so_luong) as daily_quantity,
-            SUM(loi_nhuan_gop) as daily_profit,
-            COUNT(DISTINCT ma_giao_dich) as transaction_count
-        FROM retail_dw.fact_transactions
-        WHERE ngay >= today() - {days}
-        GROUP BY ngay, chi_nhanh, ma_hang, nhom_hang_cap_1, nhom_hang_cap_2
-        ORDER BY ngay
+    def load_historical_data(self, days: int = 0) -> pd.DataFrame:
+        """Load dữ liệu lịch sử từ ClickHouse (fct_regular_sales) - Chỉ dữ liệu baseline, không khuyến mại
+        
+        Args:
+            days: Số ngày dữ liệu để load. Nếu 0, load toàn bộ dữ liệu.
         """
         
-        df = self.ch.query(query)
-        df['ngay'] = pd.to_datetime(df['ngay'])
-        return df
+        # Kiểm tra bảng fct_regular_sales có tồn tại không
+        check_query = """
+        SELECT count() 
+        FROM system.tables 
+        WHERE database = 'retail_dw' AND name = 'fct_regular_sales'
+        """
+        try:
+            table_exists = self.ch.query(check_query).iloc[0, 0] > 0
+        except:
+            table_exists = False
+        
+        if not table_exists:
+            logger.warning("⚠️ Bảng fct_regular_sales chưa tồn tại. Cần chạy DBT models trước.")
+            # Fallback về fct_daily_sales nếu chưa có regular_sales
+            logger.info("📌 Fallback: Sử dụng fct_daily_sales")
+            return self._load_from_daily_sales(days)
+        
+        # Query từ bảng fct_regular_sales (chỉ dữ liệu không khuyến mại)
+        # JOIN với dim_product để lấy category info
+        # Nếu days=0, load toàn bộ dữ liệu
+        date_filter = f"WHERE f.transaction_date >= today() - {days}" if days > 0 else ""
+        
+        query = f"""
+        SELECT
+            f.transaction_date as ngay,
+            f.branch_code as chi_nhanh,
+            f.product_code as ma_hang,
+            p.category_level_1 as nhom_hang_cap_1,
+            p.category_level_2 as nhom_hang_cap_2,
+            -- Time-based features tính từ ngay
+            toDayOfWeek(f.transaction_date) as day_of_week,
+            toDayOfMonth(f.transaction_date) as day_of_month,
+            toMonth(f.transaction_date) as month,
+            toWeek(f.transaction_date) as week_of_year,
+            toDayOfWeek(f.transaction_date) IN (6, 7) as is_weekend,
+            toDayOfMonth(f.transaction_date) = 1 as is_month_start,
+            toDayOfMonth(f.transaction_date) = toDayOfMonth(toLastDayOfMonth(f.transaction_date)) as is_month_end,
+            -- Holiday detection đơn giản
+            multiIf(
+                (toMonth(f.transaction_date) = 1 AND toDayOfMonth(f.transaction_date) <= 5), true,
+                (toMonth(f.transaction_date) = 4 AND toDayOfMonth(f.transaction_date) = 30), true,
+                (toMonth(f.transaction_date) = 5 AND toDayOfMonth(f.transaction_date) = 1), true,
+                (toMonth(f.transaction_date) = 9 AND toDayOfMonth(f.transaction_date) = 2), true,
+                false
+            ) as is_holiday,
+            -- Metrics
+            f.gross_revenue as daily_revenue,
+            f.quantity_sold as daily_quantity,
+            f.gross_profit as daily_profit,
+            f.transaction_count,
+            -- Product metadata
+            p.brand as thuong_hieu,
+            p.abc_class
+        FROM retail_dw.fct_regular_sales f
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
+        {date_filter}
+        ORDER BY f.transaction_date
+        """
+        
+        try:
+            df = self.ch.query(query)
+            df['ngay'] = pd.to_datetime(df['ngay'])
+            # Fill NA cho category
+            df['nhom_hang_cap_1'] = df['nhom_hang_cap_1'].fillna('Unknown')
+            df['nhom_hang_cap_2'] = df['nhom_hang_cap_2'].fillna('Unknown')
+            df['thuong_hieu'] = df['thuong_hieu'].fillna('Unknown')
+            df['abc_class'] = df['abc_class'].fillna('C')
+            
+            logger.info(f"✅ Đã load {len(df):,} records từ fct_regular_sales (baseline only)")
+            logger.info(f"   📊 Date range: {df['ngay'].min()} to {df['ngay'].max()}")
+            logger.info(f"   📊 Products: {df['ma_hang'].nunique()}, Branches: {df['chi_nhanh'].nunique()}")
+            return df
+            
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi query fct_regular_sales: {e}")
+            return self._load_from_daily_sales(days)
+    
+    def _load_from_daily_sales(self, days: int = 0) -> pd.DataFrame:
+        """Fallback: Load từ fct_daily_sales nếu fct_regular_sales chưa có
+        
+        Args:
+            days: Số ngày dữ liệu để load. Nếu 0, load toàn bộ dữ liệu.
+        """
+        
+        check_query = """
+        SELECT count() 
+        FROM system.tables 
+        WHERE database = 'retail_dw' AND name = 'fct_daily_sales'
+        """
+        try:
+            table_exists = self.ch.query(check_query).iloc[0, 0] > 0
+        except:
+            table_exists = False
+            
+        if not table_exists:
+            logger.error("❌ Không tìm thấy bảng fct_daily_sales")
+            return pd.DataFrame(columns=[
+                'ngay', 'chi_nhanh', 'ma_hang', 'nhom_hang_cap_1', 'nhom_hang_cap_2',
+                'day_of_week', 'day_of_month', 'month', 'week_of_year', 'is_weekend',
+                'is_month_start', 'is_month_end', 'is_holiday',
+                'daily_revenue', 'daily_quantity', 'daily_profit', 'transaction_count'
+            ])
+        
+        # Query từ fct_daily_sales, loại bỏ promotion products
+        # Nếu days=0, load toàn bộ dữ liệu
+        date_filter = f"AND f.transaction_date >= today() - {days}" if days > 0 else ""
+        
+        query = f"""
+        SELECT
+            f.transaction_date as ngay,
+            f.branch_code as chi_nhanh,
+            f.product_code as ma_hang,
+            p.category_level_1 as nhom_hang_cap_1,
+            p.category_level_2 as nhom_hang_cap_2,
+            toDayOfWeek(f.transaction_date) as day_of_week,
+            toDayOfMonth(f.transaction_date) as day_of_month,
+            toMonth(f.transaction_date) as month,
+            toWeek(f.transaction_date) as week_of_year,
+            toDayOfWeek(f.transaction_date) IN (6, 7) as is_weekend,
+            toDayOfMonth(f.transaction_date) = 1 as is_month_start,
+            toDayOfMonth(f.transaction_date) = toDayOfMonth(toLastDayOfMonth(f.transaction_date)) as is_month_end,
+            multiIf(
+                (toMonth(f.transaction_date) = 1 AND toDayOfMonth(f.transaction_date) <= 5), true,
+                (toMonth(f.transaction_date) = 4 AND toDayOfMonth(f.transaction_date) = 30), true,
+                (toMonth(f.transaction_date) = 5 AND toDayOfMonth(f.transaction_date) = 1), true,
+                (toMonth(f.transaction_date) = 9 AND toDayOfMonth(f.transaction_date) = 2), true,
+                false
+            ) as is_holiday,
+            f.gross_revenue as daily_revenue,
+            f.quantity_sold as daily_quantity,
+            f.gross_profit as daily_profit,
+            f.transaction_count,
+            p.brand as thuong_hieu,
+            p.abc_class
+        FROM retail_dw.fct_daily_sales f
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
+        WHERE lower(p.category_level_1) NOT LIKE '%khuyến mại%'
+          AND lower(p.category_level_1) NOT LIKE '%khuyen mai%'
+          {date_filter}
+        ORDER BY f.transaction_date
+        """
+        
+        try:
+            df = self.ch.query(query)
+            df['ngay'] = pd.to_datetime(df['ngay'])
+            df['nhom_hang_cap_1'] = df['nhom_hang_cap_1'].fillna('Unknown')
+            df['nhom_hang_cap_2'] = df['nhom_hang_cap_2'].fillna('Unknown')
+            df['thuong_hieu'] = df['thuong_hieu'].fillna('Unknown')
+            df['abc_class'] = df['abc_class'].fillna('C')
+            
+            logger.info(f"✅ Đã load {len(df):,} records từ fct_daily_sales (fallback, đã loại bỏ promotion)")
+            return df
+            
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi query fct_daily_sales: {e}")
+            return pd.DataFrame(columns=[
+                'ngay', 'chi_nhanh', 'ma_hang', 'nhom_hang_cap_1', 'nhom_hang_cap_2',
+                'day_of_week', 'day_of_month', 'month', 'week_of_year', 'is_weekend',
+                'is_month_start', 'is_month_end', 'is_holiday',
+                'daily_revenue', 'daily_quantity', 'daily_profit', 'transaction_count'
+            ])
     
     def create_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Tạo features cho model"""
+        """
+        Tạo features cho model.
+        
+        NOTE: Time-based features (day_of_week, month, is_weekend, etc.) 
+        được tạo tự động từ cột 'ngay' để đảm bảo consistency giữa train và predict.
+        Function này tạo:
+        - Time-based features (từ ngay)
+        - Lag features
+        - Rolling statistics  
+        - Growth rate
+        - Categorical encoding
+        """
         df = df.copy()
         
-        # Time-based features
-        df['day_of_week'] = df['ngay'].dt.dayofweek
+        # Đảm bảo ngay là datetime
+        df['ngay'] = pd.to_datetime(df['ngay'])
+        
+        # Tạo time-based features từ ngay (quan trọng cho predict ngày tương lai)
+        df['day_of_week'] = df['ngay'].dt.dayofweek + 1  # 1=Monday, 7=Sunday
         df['day_of_month'] = df['ngay'].dt.day
         df['month'] = df['ngay'].dt.month
-        df['week_of_year'] = df['ngay'].dt.isocalendar().week
-        df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
-        df['is_month_start'] = df['ngay'].dt.is_month_start.astype(int)
-        df['is_month_end'] = df['ngay'].dt.is_month_end.astype(int)
+        df['week_of_year'] = df['ngay'].dt.isocalendar().week.astype(int)
+        df['is_weekend'] = (df['day_of_week'] >= 6).astype(int)
+        df['is_month_start'] = (df['day_of_month'] == 1).astype(int)
+        df['is_month_end'] = (df['day_of_month'] == df['ngay'].dt.days_in_month).astype(int)
         
-        # Vietnamese holidays (simplified)
-        df['is_holiday'] = self._is_vietnamese_holiday(df['ngay']).astype(int)
+        # Holiday detection đơn giản
+        df['is_holiday'] = (
+            ((df['month'] == 1) & (df['day_of_month'] <= 5)) |  # Tết
+            ((df['month'] == 4) & (df['day_of_month'] == 30)) |  # 30/4
+            ((df['month'] == 5) & (df['day_of_month'] == 1)) |   # 1/5
+            ((df['month'] == 9) & (df['day_of_month'] == 2))     # 2/9
+        ).astype(int)
         
         # Lag features - điều chỉnh dựa trên số ngày dữ liệu có sẵn
         df = df.sort_values(['chi_nhanh', 'ma_hang', 'ngay'])
@@ -133,39 +310,43 @@ class SalesForecaster:
             df[f'rolling_std_{window}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'] \
                 .transform(lambda x: x.rolling(window, min_periods=1).std())
         
-        # Growth rate
+        # Growth rate - handle inf values
         df['quantity_growth'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'].pct_change()
+        # Replace inf with NaN and fill with 0
+        df['quantity_growth'] = df['quantity_growth'].replace([np.inf, -np.inf], np.nan).fillna(0)
         
-        # Encoding cho categorical
-        df['branch_encoded'] = pd.Categorical(df['chi_nhanh']).codes
-        df['category1_encoded'] = pd.Categorical(df['nhom_hang_cap_1']).codes
-        df['category2_encoded'] = pd.Categorical(df['nhom_hang_cap_2']).codes
+        # Encoding cho categorical - đảm bảo kiểu int
+        df['branch_encoded'] = pd.Categorical(df['chi_nhanh']).codes.astype(int)
+        df['category1_encoded'] = pd.Categorical(df['nhom_hang_cap_1']).codes.astype(int)
+        df['category2_encoded'] = pd.Categorical(df['nhom_hang_cap_2']).codes.astype(int)
+        
+        # Encode thêm brand và abc_class nếu có
+        if 'thuong_hieu' in df.columns:
+            df['brand_encoded'] = pd.Categorical(df['thuong_hieu'].fillna('Unknown')).codes.astype(int)
+            df.drop(columns=['thuong_hieu'], inplace=True)  # Xoá cột gốc
+        if 'abc_class' in df.columns:
+            df['abc_encoded'] = pd.Categorical(df['abc_class'].fillna('C')).codes.astype(int)
+            df.drop(columns=['abc_class'], inplace=True)  # Xoá cột gốc
+        
+        # Clean up any remaining inf or NaN in numeric columns
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        for col in numeric_cols:
+            df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+            df[col] = df[col].fillna(0)
+        
+        # Log các cột object còn lại (debug)
+        object_cols = df.select_dtypes(include=['object']).columns.tolist()
+        if object_cols:
+            logger.info(f"   Object columns (sẽ bị loại khỏi features): {object_cols}")
         
         return df
     
-    def _is_vietnamese_holiday(self, dates: pd.Series) -> pd.Series:
-        """Kiểm tra ngày lễ Việt Nam (simplified)"""
-        holidays = []
-        for date in dates:
-            month_day = (date.month, date.day)
-            # Tết (giả định)
-            if date.month == 1 and date.day <= 5:
-                holidays.append(True)
-            # 30/4
-            elif month_day == (4, 30):
-                holidays.append(True)
-            # 1/5
-            elif month_day == (5, 1):
-                holidays.append(True)
-            # 2/9
-            elif month_day == (9, 2):
-                holidays.append(True)
-            else:
-                holidays.append(False)
-        return pd.Series(holidays, index=dates.index)
-    
-    def train_model(self, df: pd.DataFrame, target_col: str = 'daily_quantity') -> xgb.XGBRegressor:
-        """Train XGBoost model với default hyperparameters (không tuning)"""
+    def train_model(self, df: pd.DataFrame, target_col: str = 'daily_quantity', 
+                    metric_type: str = 'mape') -> xgb.XGBRegressor:
+        """Train XGBoost model với default hyperparameters (không tuning)
+        
+        Note: metric_type được truyền vào để tương thích API nhưng hàm này chỉ hỗ trợ MAPE
+        """
         # Chỉ dropna trong target column, fillna cho features
         df_clean = df.dropna(subset=[target_col]).copy()
         
@@ -181,9 +362,13 @@ class SalesForecaster:
         
         # Tự động xác định feature columns (bỏ qua các cột metadata và target)
         exclude_cols = {'ngay', 'chi_nhanh', 'ma_hang', 'nhom_hang_cap_1', 'nhom_hang_cap_2', 
+                       'thuong_hieu', 'brand', 'abc_class', 'ten_san_pham',
                        'daily_quantity', 'daily_revenue', 'daily_profit', 'transaction_count',
                        target_col}
-        available_features = [col for col in df_clean.columns if col not in exclude_cols]
+        
+        # Chỉ chọn các cột numeric
+        numeric_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
+        available_features = [col for col in numeric_cols if col not in exclude_cols]
         
         if not available_features:
             logger.error(f"❌ Không có features nào phù hợp trong dữ liệu")
@@ -196,6 +381,9 @@ class SalesForecaster:
         
         logger.info(f"📊 Sử dụng {len(available_features)} features: {available_features[:5]}...")
         
+        # Lưu feature columns để dùng sau này (predict, etc.)
+        self.feature_cols = available_features
+        
         X = df_clean[available_features].fillna(0)  # Fill NA với 0
         y = df_clean[target_col]
         
@@ -203,7 +391,7 @@ class SalesForecaster:
         n_splits = min(5, max(2, len(X) // 6))
         tscv = TimeSeriesSplit(n_splits=n_splits)
         
-        # Default model
+        # Default model - Tối ưu cho CPU
         model = xgb.XGBRegressor(
             objective='reg:squarederror',
             n_estimators=500,
@@ -212,7 +400,10 @@ class SalesForecaster:
             subsample=0.8,
             colsample_bytree=0.8,
             random_state=42,
-            n_jobs=-1
+            n_jobs=-1,  # Dùng tất cả CPU cores (16 cores)
+            tree_method='hist',  # Fast histogram method cho CPU
+            max_bin=256,  # Giảm bins để tăng tốc CPU
+            enable_categorical=False  # Không dùng categorical (đã encode thủ công)
         )
         
         # Train
@@ -227,7 +418,12 @@ class SalesForecaster:
             model.fit(X_train, y_train)
             y_pred = model.predict(X_val)
             
-            mape = mean_absolute_percentage_error(y_val, y_pred)
+            # Filter out zeros để tránh MAPE explosion
+            mask = y_val > 0
+            if mask.sum() > 0:
+                mape = mean_absolute_percentage_error(y_val[mask], y_pred[mask])
+            else:
+                mape = np.nan
             cv_scores.append(mape)
         
         if cv_scores:
@@ -245,7 +441,7 @@ class SalesForecaster:
         return model
 
     def train_model_optuna(self, df: pd.DataFrame, target_col: str = 'daily_quantity', 
-                          n_trials: int = 50, timeout: int = 600) -> xgb.XGBRegressor:
+                          n_trials: int = 50, timeout: int = 600, metric_type: str = 'mape') -> xgb.XGBRegressor:
         """
         Train XGBoost với Bayesian Optimization sử dụng Optuna
         
@@ -254,6 +450,7 @@ class SalesForecaster:
             target_col: Cột target cần dự báo
             n_trials: Số lần thử hyperparameters
             timeout: Thờigian tối đa (giây)
+            metric_type: 'mape', 'mdape', hoặc 'mae' - metric để optimize
         
         Returns:
             XGBRegressor với best hyperparameters
@@ -292,6 +489,9 @@ class SalesForecaster:
         
         logger.info(f"📊 Optuna sử dụng {len(available_features)} features")
         
+        # Lưu feature columns để dùng sau này
+        self.feature_cols = available_features
+        
         X = df_clean[available_features].fillna(0)
         y = df_clean[target_col]
         
@@ -326,8 +526,12 @@ class SalesForecaster:
             params = {
                 'objective': 'reg:squarederror',
                 'random_state': 42,
-                'n_jobs': -1,
+                'n_jobs': -1,  # Dùng tất cả 16 CPU cores
                 'verbosity': 0,
+                
+                # CPU optimizations
+                'tree_method': 'hist',  # Fast histogram (CPU optimized)
+                'max_bin': 256,  # Giảm bins để tăng tốc
                 
                 # Tree structure - quan trọng nhất cho time series
                 'max_depth': trial.suggest_int('max_depth', 3, 10),
@@ -359,13 +563,27 @@ class SalesForecaster:
                 model.fit(
                     X_train_cv, y_train_cv,
                     eval_set=[(X_valid_cv, y_valid_cv)],
-                    early_stopping_rounds=30,
                     verbose=False
                 )
                 
                 y_pred = model.predict(X_valid_cv)
-                mape = mean_absolute_percentage_error(y_valid_cv, y_pred)
-                cv_scores.append(mape)
+                
+                # Chọn metric phù hợp
+                if metric_type == 'mdape':
+                    # Median Absolute Percentage Error - ít nhạy với outliers
+                    score = median_absolute_percentage_error(y_valid_cv, y_pred)
+                elif metric_type == 'mae':
+                    # Mean Absolute Error - phù hợp cho profit margin
+                    score = mean_absolute_error(y_valid_cv, y_pred)
+                else:  # mape
+                    # Filter out zeros để tránh division by zero
+                    mask = y_valid_cv > 0
+                    if mask.sum() > 0:
+                        score = mean_absolute_percentage_error(y_valid_cv[mask], y_pred[mask])
+                    else:
+                        score = np.nan
+                
+                cv_scores.append(score)
             
             return np.mean(cv_scores)
         
@@ -382,7 +600,8 @@ class SalesForecaster:
         study.optimize(objective, n_trials=n_trials, timeout=timeout, show_progress_bar=True)
         
         # Log kết quả
-        logger.info(f"✅ Best MAPE: {study.best_value:.4f}")
+        metric_name = 'MdAPE' if metric_type == 'mdape' else ('MAE' if metric_type == 'mae' else 'MAPE')
+        logger.info(f"✅ Best {metric_name}: {study.best_value:.4f}")
         logger.info(f"🎯 Best params: {study.best_params}")
         
         # Train final model với best params + early stopping
@@ -398,17 +617,34 @@ class SalesForecaster:
         final_model.fit(
             X_train_full, y_train_full,
             eval_set=[(X_val, y_val)],
-            early_stopping_rounds=50,
             verbose=False
         )
         
-        # Validation metrics
+        # Validation metrics - tính tất cả các metrics
         y_pred = final_model.predict(X_val)
-        val_mape = mean_absolute_percentage_error(y_val, y_pred)
         val_rmse = np.sqrt(mean_squared_error(y_val, y_pred))
         val_mae = mean_absolute_error(y_val, y_pred)
         
-        logger.info(f"📊 Validation MAPE: {val_mape:.4f}")
+        # MAPE có thể bị lỗi nếu y_val có giá trị 0, nên filter ra
+        # Chỉ tính MAPE cho các giá trị y_val > 0
+        mask = y_val > 0
+        if mask.sum() > 0:
+            val_mape = mean_absolute_percentage_error(y_val[mask], y_pred[mask])
+        else:
+            val_mape = np.nan
+            
+        # MdAPE ít bị ảnh hưởng bởi outliers hơn
+        val_mdape = median_absolute_percentage_error(y_val, y_pred)
+        
+        # Log theo metric type
+        if metric_type == 'mdape':
+            logger.info(f"📊 Validation MdAPE: {val_mdape:.4f}")
+            logger.info(f"📊 Validation MAPE: {val_mape:.4f} (reference)")
+        elif metric_type == 'mae':
+            logger.info(f"📊 Validation MAE: {val_mae:.4f}")
+            logger.info(f"📊 Validation MAPE: {val_mape:.4f} (reference)")
+        else:
+            logger.info(f"📊 Validation MAPE: {val_mape:.4f}")
         logger.info(f"📊 Validation RMSE: {val_rmse:.4f}")
         logger.info(f"📊 Validation MAE: {val_mae:.4f}")
         
@@ -420,16 +656,37 @@ class SalesForecaster:
         logger.info(f"🏆 Top 5 features:\n{importance.head().to_string()}")
         
         # Lưu metrics và study
-        self.metrics[target_col] = {
+        # Lấy best_iteration nếu có early stopping
+        try:
+            best_iter = final_model.best_iteration
+        except:
+            best_iter = final_model.n_estimators
+            
+        # Lưu metrics theo loại
+        metrics_dict = {
             'tuning_method': 'optuna',
             'best_params': study.best_params,
-            'cv_mape': study.best_value,
-            'val_mape': val_mape,
             'val_rmse': val_rmse,
             'val_mae': val_mae,
-            'best_iteration': final_model.best_iteration,
-            'n_trials': len(study.trials)
+            'val_mape': val_mape,
+            'val_mdape': val_mdape,
+            'best_iteration': best_iter,
+            'n_trials': len(study.trials),
+            'primary_metric': metric_type
         }
+        
+        # Lưu metric chính theo loại (để hiển thị trong summary)
+        if metric_type == 'mdape':
+            metrics_dict['cv_mdape'] = study.best_value
+            metrics_dict['val_mdape'] = val_mdape
+        elif metric_type == 'mae':
+            metrics_dict['cv_mae'] = study.best_value
+            metrics_dict['val_mae'] = val_mae
+        else:
+            metrics_dict['cv_mape'] = study.best_value
+            metrics_dict['val_mape'] = val_mape
+            
+        self.metrics[target_col] = metrics_dict
         self.studies[target_col] = study
         
         # Lưu study
@@ -440,8 +697,11 @@ class SalesForecaster:
         return final_model
 
     def train_model_random_search(self, df: pd.DataFrame, target_col: str = 'daily_quantity',
-                                   n_iter: int = 20) -> xgb.XGBRegressor:
-        """Fallback: RandomizedSearchCV khi Optuna không available"""
+                                   n_iter: int = 20, metric_type: str = 'mape') -> xgb.XGBRegressor:
+        """Fallback: RandomizedSearchCV khi Optuna không available
+        
+        Note: metric_type được truyền vào để tương thích API nhưng Random Search chỉ hỗ trợ MAPE
+        """
         
         df_clean = df.dropna()
         X = df_clean[self.feature_cols]
@@ -464,7 +724,9 @@ class SalesForecaster:
         base_model = xgb.XGBRegressor(
             objective='reg:squarederror',
             random_state=42,
-            n_jobs=-1
+            n_jobs=-1,
+            tree_method='hist',
+            max_bin=256
         )
         
         logger.info(f"🔍 Starting RandomizedSearchCV for '{target_col}'...")
@@ -493,8 +755,133 @@ class SalesForecaster:
         
         return random_search.best_estimator_
     
+    def get_latest_data_date(self) -> Optional[date]:
+        """Lấy ngày dữ liệu mới nhất trong ClickHouse - Trả về date object"""
+        try:
+            query = """
+            SELECT max(transaction_date) as max_date
+            FROM retail_dw.fct_regular_sales
+            """
+            result = self.ch.query(query)
+            if result is not None and len(result) > 0 and result.iloc[0, 0] is not None:
+                max_date = result.iloc[0, 0]
+                if isinstance(max_date, str):
+                    return pd.to_datetime(max_date).date()
+                elif hasattr(max_date, 'date'):
+                    return max_date.date()
+                return max_date
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ Không thể lấy ngày dữ liệu mới nhất: {e}")
+            return None
+    
+    def get_last_training_date(self) -> Optional[date]:
+        """Lấy ngày training gần nhất từ Redis hoặc file - Trả về date object"""
+        try:
+            date_str = None
+            
+            # Thử lấy từ Redis (nếu có)
+            try:
+                from redis_buffer import get_buffer
+                redis = get_buffer()
+                last_train = redis.client.get('ml_last_training_date')
+                if last_train:
+                    date_str = last_train.decode()
+            except ImportError:
+                pass
+            
+            # Nếu không có trong Redis, thử lấy từ file
+            if date_str is None:
+                timestamp_file = os.path.join(self.model_dir, '.last_training')
+                if os.path.exists(timestamp_file):
+                    with open(timestamp_file, 'r') as f:
+                        date_str = f.read().strip()
+            
+            # Parse date string thành date object
+            if date_str:
+                # Hỗ trợ cả format cũ (datetime ISO) và format mới (date only)
+                if 'T' in date_str or ' ' in date_str:
+                    # Format cũ: 2026-02-21T10:30:00 hoặc 2026-02-21 10:30:00
+                    return pd.to_datetime(date_str).date()
+                else:
+                    # Format mới: 2026-02-21
+                    from datetime import datetime as dt
+                    return dt.fromisoformat(date_str).date()
+            
+            return None
+        except Exception as e:
+            logger.debug(f"Không thể lấy ngày training gần nhất: {e}")
+            return None
+    
+    def _load_models_if_exist(self) -> bool:
+        """Load models từ file nếu tồn tại"""
+        loaded = False
+        for name in ['product_quantity', 'category_trend']:
+            model_path = os.path.join(self.model_dir, f'{name}_model.pkl')
+            if os.path.exists(model_path):
+                try:
+                    self.models[name] = joblib.load(model_path)
+                    logger.info(f"✅ Loaded existing model: {name}")
+                    loaded = True
+                except Exception as e:
+                    logger.warning(f"⚠️ Không thể load model {name}: {e}")
+        return loaded
+    
+    def save_training_timestamp(self):
+        """Lưu thờigian training hiện tại - Chỉ lưu date, không lưu time để tránh lỗi timezone"""
+        try:
+            # Chỉ lưu date (YYYY-MM-DD), không lưu time để tránh lỗi timezone
+            now_date = datetime.now().date().isoformat()
+            
+            # Thử lưu vào Redis (nếu có)
+            try:
+                from redis_buffer import get_buffer
+                redis = get_buffer()
+                redis.client.set('ml_last_training_date', now_date)
+            except ImportError:
+                pass
+            
+            # Luôn lưu vào file
+            timestamp_file = os.path.join(self.model_dir, '.last_training')
+            with open(timestamp_file, 'w') as f:
+                f.write(now_date)
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Không thể lưu timestamp training: {e}")
+    
+    def should_retrain(self, min_new_days: int = 1) -> tuple:
+        """
+        Kiểm tra có cần train lại không
+        
+        Returns:
+            tuple: (should_train: bool, reason: str)
+        """
+        latest_date = self.get_latest_data_date()
+        last_train_date = self.get_last_training_date()
+        
+        if latest_date is None:
+            return False, "Không thể lấy ngày dữ liệu mới nhất"
+        
+        if last_train_date is None:
+            return True, "Chưa có lịch sử training"
+        
+        # Cả hai đã là date objects sau khi refactor
+        # Đảm bảo cùng kiểu date
+        from datetime import date
+        if not isinstance(latest_date, date):
+            latest_date = pd.to_datetime(latest_date).date()
+        if not isinstance(last_train_date, date):
+            last_train_date = pd.to_datetime(last_train_date).date()
+        
+        days_diff = (latest_date - last_train_date).days
+        
+        if days_diff < min_new_days:
+            return False, f"Không có dữ liệu mới (last_data={latest_date}, last_train={last_train_date}, diff={days_diff} days)"
+        
+        return True, f"Có dữ liệu mới: {days_diff} ngày kể từ lần train cuối"
+    
     def train_all_models(self, use_tuning: bool = True, tuning_method: str = 'optuna',
-                         n_trials: int = 50, days: int = 365, send_email: bool = True) -> Dict:
+                         n_trials: int = 50, days: int = 0, send_email: bool = True) -> Dict:
         """
         Train models cho tất cả levels
         
@@ -515,6 +902,13 @@ class SalesForecaster:
         logger.info("🚀 BẮT ĐẦU TRAINING PIPELINE")
         logger.info("=" * 60)
         
+        # Log thông tin dữ liệu (không dùng để quyết định skip)
+        latest_data = self.get_latest_data_date()
+        last_training = self.get_last_training_date()
+        if latest_data and last_training:
+            days_diff = (latest_data - last_training).days
+            logger.info(f"📊 Latest data: {latest_data}, Last training: {last_training}, Diff: {days_diff} days")
+        
         # Load data
         logger.info(f"📥 Loading {days} days of historical data...")
         df = self.load_historical_data(days=days)
@@ -525,34 +919,32 @@ class SalesForecaster:
         df_features = self.create_features(df)
         logger.info(f"✅ Created {len(self.feature_cols)} features")
         
-        # Chọn training function
+        # Chọn training function với metric type
         if use_tuning:
             if tuning_method == 'optuna' and OPTUNA_AVAILABLE:
-                train_func = lambda df, target: self.train_model_optuna(df, target, n_trials=n_trials)
+                train_func = lambda df, target, metric_type='mape': self.train_model_optuna(df, target, n_trials=n_trials, metric_type=metric_type)
                 logger.info(f"🎯 Using Optuna tuning with {n_trials} trials")
             else:
-                train_func = lambda df, target: self.train_model_random_search(df, target, n_iter=n_trials)
+                train_func = lambda df, target, metric_type='mape': self.train_model_random_search(df, target, n_iter=n_trials, metric_type=metric_type)
                 logger.info(f"🎯 Using Random Search with {n_trials} iterations")
         else:
-            train_func = self.train_model
+            train_func = lambda df, target, metric_type='mape': self.train_model(df, target, metric_type=metric_type)
             logger.info("⚡ Using default hyperparameters (no tuning)")
         
-        # Model 1: Product-level quantity forecast
+        # Model 1: Product-level quantity forecast - Dùng MdAPE
         logger.info("\n" + "-" * 40)
-        logger.info("📦 Model 1: Product-Level Quantity Forecast")
+        logger.info("📦 Model 1: Product-Level Quantity Forecast (MdAPE)")
         logger.info("-" * 40)
-        self.models['product_quantity'] = train_func(df_features, 'daily_quantity')
+        self.models['product_quantity'] = train_func(df_features, 'daily_quantity', metric_type='mdape')
         
-        # Model 2: Revenue forecast
+        # Model 2: Category Trend Forecast (Seasonal/Festival) - Độ tin cậy thấp nhất
         logger.info("\n" + "-" * 40)
-        logger.info("💰 Model 2: Revenue Forecast")
+        logger.info("📊 Model 2: Category Trend Forecast (Seasonal/Festival)")
+        logger.info("   Mục tiêu: Xác định xu hướng bán hàng theo mùa/lễ tết")
+        logger.info("   Độ tin cậy: LOW - Chỉ dùng cho xu hướng dài hạn")
         logger.info("-" * 40)
-        self.models['product_revenue'] = train_func(df_features, 'daily_revenue')
         
-        # Model 3: Category-level
-        logger.info("\n" + "-" * 40)
-        logger.info("📊 Model 3: Category-Level Forecast")
-        logger.info("-" * 40)
+        # Aggregate lên category level
         category_df = df_features.groupby(['ngay', 'nhom_hang_cap_1']).agg({
             'daily_quantity': 'sum',
             'daily_revenue': 'sum',
@@ -566,7 +958,6 @@ class SalesForecaster:
             'is_holiday': 'first'
         }).reset_index()
         
-        # Tạo lại features cho category-level (không cần lag features phức tạp)
         category_df = category_df.sort_values(['nhom_hang_cap_1', 'ngay'])
         
         # Lag features cho category
@@ -581,23 +972,33 @@ class SalesForecaster:
         
         # Growth rate
         category_df['quantity_growth'] = category_df.groupby('nhom_hang_cap_1')['daily_quantity'].pct_change()
+        category_df['quantity_growth'] = category_df['quantity_growth'].replace([np.inf, -np.inf], np.nan).fillna(0)
         
-        # Encoding cho category
+        # Encoding
         category_df['category1_encoded'] = pd.Categorical(category_df['nhom_hang_cap_1']).codes
         
-        # Thêm các cột cần thiết nhưng không có giá trị cho category-level
-        category_df['chi_nhanh'] = 'ALL_BRANCHES'  # Dummy value
-        category_df['ma_hang'] = 'ALL_PRODUCTS'    # Dummy value
-        category_df['nhom_hang_cap_2'] = 'ALL_CAT2'  # Dummy value
+        # Clean up
+        numeric_cols = category_df.select_dtypes(include=[np.number]).columns
+        for col in numeric_cols:
+            category_df[col] = category_df[col].replace([np.inf, -np.inf], np.nan).fillna(0)
+        
+        # Dummy values cho category-level
+        category_df['chi_nhanh'] = 'ALL_BRANCHES'
+        category_df['ma_hang'] = 'ALL_PRODUCTS'
+        category_df['nhom_hang_cap_2'] = 'ALL_CAT2'
         category_df['branch_encoded'] = 0
         category_df['category2_encoded'] = 0
         
-        # Thêm các lag features còn thiếu với giá trị 0
+        # Fill missing features
         for col in self.feature_cols:
             if col not in category_df.columns:
                 category_df[col] = 0
         
-        self.models['category_quantity'] = train_func(category_df, 'daily_quantity')
+        # Model 2 dùng target riêng để tránh ghi đè metrics
+        category_df['category_daily_quantity'] = category_df['daily_quantity']
+        # TODO: Model 2 cần metric riêng cho seasonal forecast (ví dụ: sMAPE)
+        self.models['category_trend'] = train_func(category_df, 'category_daily_quantity', metric_type='mape')
+        logger.info("⚠️  Lưu ý: Model 2 có độ tin cậy thấp - cần dữ liệu >= 1 năm để seasonal forecast chính xác")
         
         # Lưu models
         logger.info("\n" + "-" * 40)
@@ -614,18 +1015,39 @@ class SalesForecaster:
             json.dump(self.metrics, f, indent=2, ensure_ascii=False)
         logger.info(f"✅ Metrics saved to {metrics_path}")
         
-        # Summary
+        # Summary - Map model names to their target columns và metrics
         logger.info("\n" + "=" * 60)
         logger.info("📊 TRAINING SUMMARY")
         logger.info("=" * 60)
-        for model_name, metrics in self.metrics.items():
-            cv_mape = metrics.get('cv_mape', 'N/A')
-            val_mape = metrics.get('val_mape', 'N/A')
+        
+        # Map model names to (target_col, metric_label, cv_key, val_key)
+        model_metric_map = {
+            'product_quantity': ('daily_quantity', 'MdAPE', 'cv_mdape', 'val_mdape'),
+            'category_trend': ('category_daily_quantity', 'MAPE', 'cv_mape', 'val_mape')
+        }
+        
+        for model_name in self.models.keys():
+            target_col, metric_label, cv_key, val_key = model_metric_map.get(
+                model_name, (model_name, 'MAPE', 'cv_mape', 'val_mape')
+            )
+            
+            # Lấy metrics từ self.metrics (key là target_col)
+            metrics = self.metrics.get(target_col, {})
+            cv_val = metrics.get(cv_key, 'N/A')
+            val_val = metrics.get(val_key, 'N/A')
+            
             logger.info(f"📈 {model_name}:")
-            logger.info(f"   CV MAPE: {cv_mape:.4f}" if isinstance(cv_mape, float) else f"   CV MAPE: {cv_mape}")
-            if isinstance(val_mape, float):
-                logger.info(f"   Val MAPE: {val_mape:.4f}")
+            if isinstance(cv_val, (int, float)):
+                logger.info(f"   CV {metric_label}: {cv_val:.4f}")
+            else:
+                logger.info(f"   CV {metric_label}: {cv_val}")
+            if isinstance(val_val, (int, float)):
+                logger.info(f"   Val {metric_label}: {val_val:.4f}")
         logger.info("=" * 60)
+        
+        # Lưu timestamp training
+        self.save_training_timestamp()
+        logger.info("💾 Đã lưu timestamp training")
         
         # Gửi email thông báo
         training_duration = time.time() - start_time
@@ -647,7 +1069,17 @@ class SalesForecaster:
         return self.metrics
 
     def get_tuning_summary(self, target_col: str = None) -> pd.DataFrame:
-        """Trả về summary của Optuna study"""
+        """
+        Trả về summary của Optuna study
+        
+        ⚠️ DEPRECATED: Chỉ dùng cho debug, không dùng trong workflow chính
+        """
+        warnings.warn(
+            "get_tuning_summary() is deprecated and will be removed in future versions. "
+            "Use training_metrics.json instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         if not OPTUNA_AVAILABLE or not self.studies:
             return pd.DataFrame()
         
@@ -667,104 +1099,276 @@ class SalesForecaster:
             })
         return pd.DataFrame(summaries)
     
-    def predict_next_week(self) -> pd.DataFrame:
-        """Dự báo cho tuần tới"""
+    def get_top_abc_products(self, top_n: int = 5) -> pd.DataFrame:
+        """
+        Lấy Top N sản phẩm từ mỗi phân loại ABC (A, B, C) từ dim_product.
+        Loại bỏ các sản phẩm khuyến mại để đảm bảo dự báo baseline chính xác.
+        Tổng cộng: top_n * 3 = 15 sản phẩm.
+        """
+        query = f"""
+        SELECT 
+            product_code as ma_hang,
+            abc_class,
+            total_historical_revenue
+        FROM (
+            SELECT 
+                product_code,
+                abc_class,
+                total_historical_revenue,
+                row_number() OVER (PARTITION BY abc_class ORDER BY total_historical_revenue DESC) as rn
+            FROM retail_dw.dim_product
+            WHERE abc_class IN ('A', 'B', 'C')
+              AND total_historical_revenue > 0
+              AND lower(category_level_1) NOT LIKE '%khuyến mại%'
+              AND lower(category_level_1) NOT LIKE '%khuyen mai%'
+        )
+        WHERE rn <= {top_n}
+        ORDER BY abc_class, rn
+        """
+        
+        df = self.ch.query(query)
+        logger.info(f"📊 Đã chọn {len(df)} sản phẩm (Top {top_n} từ mỗi loại ABC)")
+        if len(df) > 0:
+            abc_summary = df.groupby('abc_class').size().to_dict()
+            for cls, count in abc_summary.items():
+                logger.info(f"   - Loại {cls}: {count} sản phẩm")
+        return df
+    
+    def predict_next_week(self, use_abc_filter: bool = True, abc_top_n: int = 5) -> pd.DataFrame:
+        """
+        Dự báo cho tuần tới với batch query và ABC-based product selection.
+        Sử dụng Model 1 (product_quantity).
+        
+        Args:
+            use_abc_filter: Nếu True, chỉ dự báo cho Top N sản phẩm mỗi loại ABC (A,B,C)
+            abc_top_n: Số sản phẩm chọn từ mỗi loại ABC (mặc định: 5)
+        
+        Returns:
+            DataFrame với dự báo cho 7 ngày tới
+        """
         # Load models nếu chưa có
         if not self.models:
-            for name in ['product_quantity', 'product_revenue', 'category_quantity']:
+            for name in ['product_quantity', 'category_trend']:
                 model_path = os.path.join(self.model_dir, f'{name}_model.pkl')
                 if os.path.exists(model_path):
                     self.models[name] = joblib.load(model_path)
+                    logger.info(f"✅ Loaded model: {name}")
         
-        # Tạo future dates
+        if 'product_quantity' not in self.models:
+            raise ValueError("Model 'product_quantity' chưa được train hoặc load!")
+        
+        # Tạo future dates (7 ngày tới)
         future_dates = pd.date_range(
             start=datetime.now().date() + timedelta(days=1),
             periods=7,
             freq='D'
         )
         
-        # Lấy danh sách sản phẩm
-        products_query = """
-        SELECT DISTINCT chi_nhanh, ma_hang, nhom_hang_cap_1, nhom_hang_cap_2
-        FROM retail_dw.fact_transactions
-        WHERE ngay >= today() - 30
+        # BƯỚC 1: Chọn sản phẩm để dự báo
+        if use_abc_filter:
+            # Lấy Top N từ mỗi loại ABC
+            abc_products = self.get_top_abc_products(top_n=abc_top_n)
+            if len(abc_products) == 0:
+                logger.warning("⚠️ Không tìm thấy sản phẩm ABC nào. Chuyển sang dự báo tất cả sản phẩm.")
+                use_abc_filter = False
+            else:
+                product_list = abc_products['ma_hang'].tolist()
+                product_abc_map = dict(zip(abc_products['ma_hang'], abc_products['abc_class']))
+        
+        if not use_abc_filter:
+            # Lấy tất cả sản phẩm active từ fct_regular_sales (không khuyến mại)
+            # Chỉ lấy sản phẩm có trong regular sales để đảm bảo dự báo baseline
+            products_query = """
+            SELECT DISTINCT product_code as ma_hang
+            FROM retail_dw.fct_regular_sales
+            WHERE transaction_date >= today() - 30
+            """
+            try:
+                all_products = self.ch.query(products_query)
+                product_list = all_products['ma_hang'].tolist()
+                logger.info(f"✅ Loaded {len(product_list)} products from fct_regular_sales")
+            except Exception as e:
+                logger.warning(f"⚠️ Không thể query fct_regular_sales: {e}")
+                logger.info("📌 Fallback: Sử dụng fct_daily_sales và loại bỏ promotion")
+                products_query = """
+                SELECT DISTINCT f.product_code as ma_hang
+                FROM retail_dw.fct_daily_sales f
+                LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
+                WHERE f.transaction_date >= today() - 30
+                  AND lower(p.category_level_1) NOT LIKE '%khuyến mại%'
+                  AND lower(p.category_level_1) NOT LIKE '%khuyen mai%'
+                """
+                all_products = self.ch.query(products_query)
+                product_list = all_products['ma_hang'].tolist()
+            product_abc_map = {}
+        
+        logger.info(f"🔮 Dự báo cho {len(product_list)} sản phẩm x {len(future_dates)} ngày = {len(product_list) * len(future_dates)} dự báo")
+        
+        # BƯỚC 2: Batch query - Lấy toàn bộ dữ liệu lịch sử cho tất cả sản phẩm CÙNG LÚC
+        # Thay vì query từng sản phẩm (N+1 problem), ta query 1 lần cho tất cả
+        logger.info("📥 Đang tải dữ liệu lịch sử (batch query)...")
+        
+        # Tạo chuỗi product codes cho SQL IN clause
+        product_codes_str = "', '".join(product_list)
+        
+        # Sử dụng fct_regular_sales cho dự báo baseline (không khuyến mại)
+        history_query = f"""
+        SELECT 
+            f.transaction_date as ngay,
+            f.branch_code as chi_nhanh,
+            f.product_code as ma_hang,
+            p.product_name as ten_san_pham,
+            p.category_level_1 as nhom_hang_cap_1,
+            p.category_level_2 as nhom_hang_cap_2,
+            f.gross_revenue as daily_revenue,
+            f.quantity_sold as daily_quantity,
+            f.gross_profit as daily_profit,
+            f.transaction_count,
+            p.brand as thuong_hieu,
+            p.abc_class
+        FROM retail_dw.fct_regular_sales f
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
+        WHERE f.product_code IN ('{product_codes_str}')
+          AND f.transaction_date >= today() - 60
+        ORDER BY f.branch_code, f.product_code, f.transaction_date
         """
-        products = self.ch.query(products_query)
+        
+        history_df = self.ch.query(history_query)
+        history_df['ngay'] = pd.to_datetime(history_df['ngay'])
+        
+        # Fill NA cho các cột mới
+        if 'thuong_hieu' in history_df.columns:
+            history_df['thuong_hieu'] = history_df['thuong_hieu'].fillna('Unknown')
+        if 'abc_class' in history_df.columns:
+            history_df['abc_class'] = history_df['abc_class'].fillna('C')
+        history_df['nhom_hang_cap_1'] = history_df['nhom_hang_cap_1'].fillna('Unknown')
+        history_df['nhom_hang_cap_2'] = history_df['nhom_hang_cap_2'].fillna('Unknown')
+        
+        logger.info(f"✅ Đã tải {len(history_df):,} rows dữ liệu lịch sử từ fct_regular_sales")
+        
+        if len(history_df) == 0:
+            logger.error("❌ Không có dữ liệu lịch sử cho các sản phẩm được chọn!")
+            return pd.DataFrame()
+        
+        # BƯỚC 3: Tạo template cho future dates cho mỗi (chi_nhanh, ma_hang)
+        logger.info("🔧 Đang tạo features cho dự báo...")
+        
+        # Lấy danh sách unique (chi_nhanh, ma_hang, ten_san_pham, categories)
+        branch_products = history_df[['chi_nhanh', 'ma_hang', 'ten_san_pham', 'nhom_hang_cap_1', 'nhom_hang_cap_2']].drop_duplicates()
         
         forecasts = []
+        model_features = list(self.models['product_quantity'].feature_names_in_)
         
-        for date in future_dates:
-            for _, product in products.iterrows():
-                # Tạo features cho prediction
-                features = pd.DataFrame({
-                    'ngay': [date],
-                    'chi_nhanh': [product['chi_nhanh']],
-                    'ma_hang': [product['ma_hang']],
-                    'nhom_hang_cap_1': [product['nhom_hang_cap_1']],
-                    'nhom_hang_cap_2': [product['nhom_hang_cap_2']],
-                    'daily_quantity': [0],
-                    'daily_revenue': [0]
-                })
-                
-                # Lấy lịch sử gần nhất cho lag features
-                hist_query = f"""
-                SELECT * FROM retail_dw.fact_transactions
-                WHERE chi_nhanh = '{product['chi_nhanh']}'
-                  AND ma_hang = '{product['ma_hang']}'
-                  AND ngay >= today() - 35
-                ORDER BY ngay DESC
-                LIMIT 35
-                """
-                history = self.ch.query(hist_query)
-                
-                if len(history) > 0:
-                    features = pd.concat([history, features], ignore_index=True)
-                    features['ngay'] = pd.to_datetime(features['ngay'])
+        # BƯỚC 4: Xử lý từng (branch, product) trong memory (không query DB nữa)
+        for _, bp in branch_products.iterrows():
+            branch = bp['chi_nhanh']
+            product = bp['ma_hang']
+            product_name = bp['ten_san_pham']
+            cat1 = bp['nhom_hang_cap_1']
+            cat2 = bp['nhom_hang_cap_2']
+            
+            # Lấy lịch sử của sản phẩm này
+            product_history = history_df[
+                (history_df['chi_nhanh'] == branch) & 
+                (history_df['ma_hang'] == product)
+            ].sort_values('ngay').reset_index(drop=True)
+            
+            if len(product_history) < 2:
+                continue  # Cần ít nhất 2 ngày để tạo lag features
+            
+            # Dự báo cho từng ngày trong tương lai
+            for future_date in future_dates:
+                try:
+                    # Tạo row cho ngày cần dự báo
+                    future_row = pd.DataFrame({
+                        'ngay': [future_date],
+                        'chi_nhanh': [branch],
+                        'ma_hang': [product],
+                        'nhom_hang_cap_1': [cat1],
+                        'nhom_hang_cap_2': [cat2],
+                        'daily_quantity': [0],
+                        'daily_revenue': [0],
+                        'daily_profit': [0],
+                        'transaction_count': [0]
+                    })
                     
-                    features = self.create_features(features)
-                    pred_features = features[features['ngay'] == date]
+                    # Kết hợp lịch sử + ngày cần dự báo
+                    combined = pd.concat([product_history, future_row], ignore_index=True)
+                    combined['ngay'] = pd.to_datetime(combined['ngay'])
                     
-                    if len(pred_features) > 0 and 'product_quantity' in self.models:
-                        # Lấy feature names từ model đã train
-                        model_features = self.models['product_quantity'].feature_names_in_
-                        
-                        # Tạo DataFrame với đúng features
-                        X_pred = pd.DataFrame(0, index=[0], columns=model_features)
-                        
-                        # Fill giá trị từ pred_features nếu có
-                        for col in model_features:
-                            if col in pred_features.columns:
-                                X_pred[col] = pred_features[col].fillna(0).values
-                        
-                        quantity_pred = self.models['product_quantity'].predict(X_pred)[0]
-                        revenue_pred = self.models['product_revenue'].predict(X_pred)[0]
-                        
-                        forecasts.append({
-                            'forecast_date': date,
-                            'chi_nhanh': product['chi_nhanh'],
-                            'ma_hang': product['ma_hang'],
-                            'nhom_hang_cap_1': product['nhom_hang_cap_1'],
-                            'predicted_quantity': max(0, round(quantity_pred)),
-                            'predicted_revenue': max(0, revenue_pred),
-                            'confidence_lower': max(0, quantity_pred * 0.8),
-                            'confidence_upper': quantity_pred * 1.2,
-                            'created_at': datetime.now()
-                        })
+                    # Tạo features
+                    combined_features = self.create_features(combined)
+                    
+                    # Lấy row cho ngày cần dự báo
+                    pred_row = combined_features[combined_features['ngay'] == future_date]
+                    
+                    if len(pred_row) == 0:
+                        continue
+                    
+                    # Chuẩn bị features cho model (chỉ lấy các cột model cần)
+                    X_pred = pd.DataFrame(0, index=[0], columns=model_features)
+                    for col in model_features:
+                        if col in pred_row.columns:
+                            X_pred[col] = pred_row[col].fillna(0).values
+                    
+                    # Dự báo với Model 1 (Quantity) - clip để không âm
+                    quantity_pred = max(0, self.models['product_quantity'].predict(X_pred)[0])
+                    
+                    forecasts.append({
+                        'forecast_date': future_date.date(),
+                        'chi_nhanh': branch,
+                        'ma_hang': product,
+                        'ten_san_pham': product_name,
+                        'nhom_hang_cap_1': cat1,
+                        'nhom_hang_cap_2': cat2,
+                        'abc_class': product_abc_map.get(product, 'Unknown'),
+                        'predicted_quantity': round(quantity_pred),  # Đã clip >= 0 ở trên
+                        'predicted_quantity_raw': float(quantity_pred),
+                        'predicted_profit_margin': None,  # Model removed - set to NULL
+                        'confidence_lower': quantity_pred * 0.8,
+                        'confidence_upper': quantity_pred * 1.2,
+                        'created_at': datetime.now()
+                    })
+                    
+                except Exception as e:
+                    logger.debug(f"Lỗi dự báo cho {branch}/{product} ngày {future_date}: {e}")
+                    continue
         
-        return pd.DataFrame(forecasts)
+        forecasts_df = pd.DataFrame(forecasts)
+        
+        if len(forecasts_df) > 0:
+            logger.info(f"✅ Đã tạo {len(forecasts_df)} dự báo thành công")
+            
+            # Thống kê theo ABC class
+            if use_abc_filter and 'abc_class' in forecasts_df.columns:
+                abc_stats = forecasts_df.groupby('abc_class').agg({
+                    'predicted_quantity': 'sum'
+                }).round(2)
+                logger.info("📊 Tổng dự báo theo phân loại ABC:")
+                for cls, row in abc_stats.iterrows():
+                    logger.info(f"   Loại {cls}: {row['predicted_quantity']:,.0f} units")
+        else:
+            logger.warning("⚠️ Không có dự báo nào được tạo!")
+        
+        return forecasts_df
     
     def save_forecasts(self, forecasts: pd.DataFrame, send_email: bool = True):
         """Lưu dự báo vào database và gửi email thông báo"""
-        # Tạo bảng nếu chưa có
+        # Tạo bảng nếu chưa có - Schema đầy đủ các cột
         create_table_sql = """
         CREATE TABLE IF NOT EXISTS ml_forecasts (
             id SERIAL PRIMARY KEY,
             forecast_date DATE NOT NULL,
             chi_nhanh VARCHAR(100),
             ma_hang VARCHAR(50),
+            ten_san_pham VARCHAR(500),
             nhom_hang_cap_1 VARCHAR(200),
+            nhom_hang_cap_2 VARCHAR(200),
+            abc_class VARCHAR(10),
             predicted_quantity FLOAT,
+            predicted_quantity_raw FLOAT,
             predicted_revenue DECIMAL(15,2),
+            predicted_profit_margin FLOAT,
             confidence_lower FLOAT,
             confidence_upper FLOAT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -772,33 +1376,50 @@ class SalesForecaster:
         
         CREATE INDEX IF NOT EXISTS idx_forecasts_date ON ml_forecasts(forecast_date);
         CREATE INDEX IF NOT EXISTS idx_forecasts_product ON ml_forecasts(ma_hang);
+        CREATE INDEX IF NOT EXISTS idx_forecasts_abc ON ml_forecasts(abc_class);
         """
         
         from sqlalchemy import text
         with self.pg.get_connection() as conn:
             conn.execute(text(create_table_sql))
+            conn.commit()  # Commit CREATE TABLE
             
-            # Insert forecasts
-            forecasts.to_sql('ml_forecasts', conn, if_exists='append', index=False)
+            # Chỉ chọn các cột có trong bảng để insert
+            db_columns = [
+                'forecast_date', 'chi_nhanh', 'ma_hang', 'ten_san_pham',
+                'nhom_hang_cap_1', 'nhom_hang_cap_2', 'abc_class',
+                'predicted_quantity', 'predicted_quantity_raw', 'predicted_revenue',
+                'predicted_profit_margin', 'confidence_lower', 'confidence_upper'
+            ]
+            # Lọc chỉ các cột tồn tại trong DataFrame
+            available_cols = [col for col in db_columns if col in forecasts.columns]
+            forecasts_to_save = forecasts[available_cols].copy()
+            
+            forecasts_to_save.to_sql('ml_forecasts', conn, if_exists='append', index=False)
+            conn.commit()  # Commit INSERT
         
         logger.info(f"Saved {len(forecasts)} forecasts to database")
         
         # Gửi email thông báo kết quả dự báo
         if send_email and self.email_notifier and len(forecasts) > 0:
             try:
-                logger.info("📧 Đang gửi email forecast report...")
+                # Log thông tin forecasts trước khi gửi email
+                n_products = forecasts['ma_hang'].nunique() if 'ma_hang' in forecasts.columns else 0
+                logger.info(f"📧 Đang gửi email forecast report với {len(forecasts)} records, {n_products} sản phẩm...")
                 
                 # Lấy một số khuyến nghị tồn kho cho top products
                 inventory_recs = []
                 if 'ma_hang' in forecasts.columns:
                     top_products = forecasts.groupby('ma_hang')['predicted_quantity'].sum().sort_values(ascending=False).head(10)
+                    logger.info(f"   Top 10 products for inventory recommendations: {list(top_products.head(10).index)}")
                     for product_code in top_products.index:
                         try:
                             rec = self.get_inventory_recommendations(product_code)
                             if 'error' not in rec:
                                 inventory_recs.append(rec)
-                        except:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"   Could not get inventory rec for {product_code}: {e}")
+                    logger.info(f"   Got {len(inventory_recs)} inventory recommendations")
                 
                 success = self.email_notifier.send_forecast_report(
                     forecasts=forecasts,
@@ -856,15 +1477,283 @@ class SalesForecaster:
             except Exception as e:
                 logger.error(f"Không thể gửi email lỗi: {e}")
 
+    def generate_comprehensive_report(self, days: int = 7) -> Dict:
+        """
+        Tạo báo cáo dự báo toàn diện từ cả 3 models
+        
+        Returns:
+            Dict chứa các phần của báo cáo
+        """
+        import pandas as pd
+        from datetime import datetime, timedelta
+        
+        logger.info("=" * 70)
+        logger.info("📊 TẠO BÁO CÁO DỰ BÁO TOÀN DIỆN")
+        logger.info("=" * 70)
+        
+        # Load models nếu chưa có
+        if not self.models:
+            for name in ['product_quantity', 'category_trend']:
+                model_path = os.path.join(self.model_dir, f'{name}_model.pkl')
+                if os.path.exists(model_path):
+                    self.models[name] = joblib.load(model_path)
+                    logger.info(f"✅ Loaded model: {name}")
+        
+        report = {
+            'generated_at': datetime.now().isoformat(),
+            'forecast_period_days': days,
+            'models_loaded': list(self.models.keys()),
+            'sections': {}
+        }
+        
+        # ========================================
+        # PHẦN 1: DỰ BÁO SỐ LƯỢNG (Model 1)
+        # ========================================
+        logger.info("\n" + "-" * 50)
+        logger.info("📦 PHẦN 1: DỰ BÁO SỐ LƯỢNG BÁN HÀNG (Model 1 - MdAPE)")
+        logger.info("-" * 50)
+        
+        try:
+            # Dự báo cho TẤT CẢ sản phẩm (không filter ABC) để có dữ liệu đầy đủ
+            forecasts = self.predict_next_week(use_abc_filter=False)
+            
+            if len(forecasts) > 0:
+                # Tính tổng theo sản phẩm (dùng predicted_quantity)
+                product_totals = forecasts.groupby('ma_hang').agg({
+                    'predicted_quantity': 'sum',
+                    'predicted_quantity_raw': 'sum',
+                    'ten_san_pham': 'first',
+                    'nhom_hang_cap_1': 'first',
+                    'nhom_hang_cap_2': 'first',
+                    'abc_class': 'first'
+                }).sort_values('predicted_quantity', ascending=False)
+                
+                # Top 15 sản phẩm
+                top_quantity = product_totals.head(15)
+                
+                logger.info(f"\n📊 TỔNG QUAN DỰ BÁO:")
+                logger.info(f"   • Tổng số sản phẩm: {forecasts['ma_hang'].nunique()}")
+                logger.info(f"   • Tổng số ngày dự báo: 7 ngày")
+                logger.info(f"   • Tổng số lượng dự báo: {int(forecasts['predicted_quantity'].sum())} units")
+                
+                logger.info("\n🔥 Top 15 Sản phẩm dự báo bán chạy nhất (7 ngày tới):")
+                for idx, (product, row) in enumerate(top_quantity.iterrows(), 1):
+                    qty = row['predicted_quantity']
+                    cat = row['nhom_hang_cap_1']
+                    name = row.get('ten_san_pham', 'N/A')[:30]  # Giới hạn 30 ký tự
+                    abc = row.get('abc_class', 'N/A')
+                    logger.info(f"   {idx:2d}. {product} | {name:<30} | {qty:4d} units | {cat}")
+                
+                report['sections']['quantity_forecast'] = {
+                    'total_products': forecasts['ma_hang'].nunique(),
+                    'total_forecast_records': len(forecasts),
+                    'total_predicted_quantity': int(forecasts['predicted_quantity'].sum()),
+                    'total_predicted_quantity_raw': float(forecasts['predicted_quantity_raw'].sum()),
+                    'top_15_products': top_quantity.reset_index().to_dict('records')
+                }
+            else:
+                logger.warning("⚠️ Không có dữ liệu dự báo số lượng")
+                report['sections']['quantity_forecast'] = {'error': 'No forecast data'}
+                
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi tạo dự báo số lượng: {e}")
+            report['sections']['quantity_forecast'] = {'error': str(e)}
+        
+        # ========================================
+        # PHẦN 2: XU HƯỚNG CATEGORY (Model 2)
+        # ========================================
+        logger.info("\n" + "-" * 50)
+        logger.info("📊 PHẦN 2: XU HƯỚNG THEO CATEGORY (Model 2 - Seasonal/Low Confidence)")
+        logger.info("-" * 50)
+        logger.info("⚠️  Lưu ý: Model này có độ tin cậy thấp do thiếu dữ liệu mùa vụ")
+        
+        try:
+            # Phân tích từ dữ liệu forecasts (dự báo tương lai)
+            future_by_category = forecasts.groupby('nhom_hang_cap_1').agg({
+                'predicted_quantity': 'sum'
+            }).sort_values('predicted_quantity', ascending=False)
+            
+            logger.info("\n📈 Dự báo theo Category (7 ngày tới):")
+            for cat, row in future_by_category.head(10).iterrows():
+                qty = row['predicted_quantity']
+                logger.info(f"   • {cat}: {qty:5.0f} units")
+            
+            # Phân tích historical để so sánh
+            df = self.load_historical_data(days=0)  # Load toàn bộ dữ liệu có sẵn
+            if len(df) > 0:
+                hist_by_cat = df.groupby('nhom_hang_cap_1')['daily_quantity'].sum().sort_values(ascending=False)
+                logger.info("\n📊 So sánh với lịch sử (46 ngày qua):")
+                for cat in future_by_category.head(5).index:
+                    hist_qty = hist_by_cat.get(cat, 0)
+                    pred_qty = future_by_category.loc[cat, 'predicted_quantity']
+                    hist_daily = hist_qty / 46 if hist_qty > 0 else 0
+                    pred_daily = pred_qty / 7
+                    logger.info(f"   • {cat}:")
+                    logger.info(f"      - Historical: {hist_qty:,.0f} units ({hist_daily:.1f}/day)")
+                    logger.info(f"      - Predicted:  {pred_qty:,.0f} units ({pred_daily:.1f}/day)")
+                
+                report['sections']['category_trend'] = {
+                    'future_by_category': future_by_category.reset_index().to_dict('records'),
+                    'historical_by_category': hist_by_cat.reset_index().to_dict('records'),
+                    'confidence': 'LOW - Chỉ có 46 ngày dữ liệu, cần >= 1 năm để seasonal forecast chính xác'
+                }
+            else:
+                report['sections']['category_trend'] = {
+                    'future_by_category': future_by_category.reset_index().to_dict('records'),
+                    'confidence': 'LOW'
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi phân tích category trend: {e}")
+            report['sections']['category_trend'] = {'error': str(e)}
+        
+        # ========================================
+        # KHUYẾN NGHỊ TỒN KHO
+        # ========================================
+        logger.info("\n" + "-" * 50)
+        logger.info("📋 KHUYẾN NGHỊ TỒN KHO")
+        logger.info("-" * 50)
+        
+        try:
+            if len(forecasts) > 0:
+                # Tính toán khuyến nghị cho top 10 sản phẩm có dự báo cao nhất
+                top_products = forecasts.groupby('ma_hang').agg({
+                    'predicted_quantity': 'sum',
+                    'ten_san_pham': 'first',
+                    'nhom_hang_cap_1': 'first'
+                }).sort_values('predicted_quantity', ascending=False).head(10)
+                
+                recommendations = []
+                logger.info("\n📦 Top 10 sản phẩm cần chú ý tồn kho:\n")
+                
+                for idx, (product, row) in enumerate(top_products.iterrows(), 1):
+                    try:
+                        qty = row['predicted_quantity']
+                        cat = row['nhom_hang_cap_1']
+                        name = row.get('ten_san_pham', 'N/A')[:30]  # Giới hạn 30 ký tự
+                        
+                        # Tính toán khuyến nghị đơn giản
+                        avg_daily = qty / 7
+                        safety_stock = round(avg_daily * 7 * 1.5)  # 1.5x weekly demand
+                        reorder_point = round(avg_daily * 14)  # 2 weeks
+                        suggested_order = round(avg_daily * 30)  # 1 month
+                        urgency = 'HIGH' if qty > avg_daily * 14 else 'NORMAL'
+                        
+                        rec = {
+                            'product_code': product,
+                            'product_name': name,
+                            'category': cat,
+                            'predicted_7_days': int(qty),
+                            'avg_daily_demand': round(avg_daily, 2),
+                            'safety_stock': safety_stock,
+                            'reorder_point': reorder_point,
+                            'suggested_order_quantity': suggested_order,
+                            'urgency': urgency
+                        }
+                        recommendations.append(rec)
+                        
+                        logger.info(f"   {idx:2d}. 📦 {product} | {name}")
+                        logger.info(f"       ({cat}) | Dự báo: {qty:3.0f} units")
+                        logger.info(f"       Safety stock: {safety_stock:3d} | Reorder point: {reorder_point:3d} | Mức độ ưu tiên: {urgency}")
+                        
+                    except Exception as e:
+                        continue
+                
+                report['sections']['inventory_recommendations'] = recommendations
+                logger.info(f"\n✅ Đã tạo {len(recommendations)} khuyến nghị tồn kho")
+            else:
+                logger.warning("⚠️ Không có dữ liệu để đưa ra khuyến nghị")
+                
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi tạo khuyến nghị tồn kho: {e}")
+        
+        # Lưu báo cáo
+        report_path = os.path.join(self.model_dir, 'comprehensive_report.json')
+        with open(report_path, 'w', encoding='utf-8') as f:
+            # Chuyển đổi numpy types sang Python types
+            import json
+            def convert_to_serializable(obj):
+                if hasattr(obj, 'item'):  # numpy type
+                    return obj.item()
+                elif isinstance(obj, dict):
+                    return {k: convert_to_serializable(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_to_serializable(i) for i in obj]
+                return obj
+            
+            json.dump(convert_to_serializable(report), f, indent=2, ensure_ascii=False, default=str)
+        
+        logger.info(f"\n✅ Báo cáo đã được lưu tại: {report_path}")
+        logger.info("=" * 70)
+        
+        # Gửi email báo cáo nếu có forecasts
+        if 'forecasts' in locals() and len(forecasts) > 0 and self.email_notifier:
+            try:
+                logger.info("📧 Đang gửi email forecast report từ comprehensive report...")
+                
+                # Lấy inventory recommendations từ report
+                inventory_recs = report['sections'].get('inventory_recommendations', [])
+                
+                success = self.email_notifier.send_forecast_report(
+                    forecasts=forecasts,
+                    inventory_recommendations=inventory_recs,
+                    model_dir=self.model_dir
+                )
+                
+                if success:
+                    logger.info("✅ Đã gửi email forecast report từ comprehensive report")
+                else:
+                    logger.warning("⚠️ Không thể gửi email forecast report")
+            except Exception as e:
+                logger.error(f"❌ Lỗi khi gửi email từ comprehensive report: {e}")
+        
+        return report
+
 
 if __name__ == '__main__':
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='ML Forecasting Pipeline')
+    parser.add_argument('--mode', choices=['train', 'predict', 'report', 'all'], 
+                       default='all', help='Chế độ chạy')
+    parser.add_argument('--no-tuning', action='store_true', 
+                       help='Tắt hyperparameter tuning (nhanh hơn)')
+    parser.add_argument('--trials', type=int, default=50,
+                       help='Số lần thử nghiệm hyperparameter tuning')
+    parser.add_argument('--days', type=int, default=0,
+                       help='Số ngày dữ liệu lịch sử để train. 0 = load toàn bộ (default: 0)')
+    parser.add_argument('--skip-if-no-new-data', action='store_true', default=True,
+                       help='Skip training nếu không có dữ liệu mới (mặc định: True)')
+    parser.add_argument('--force-train', action='store_true',
+                       help='Buộc train lại dù không có dữ liệu mới')
+    parser.add_argument('--min-new-days', type=int, default=1,
+                       help='Số ngày dữ liệu mới tối thiểu để train lại')
+    
+    args = parser.parse_args()
+    
     forecaster = SalesForecaster()
     
-    # Train models
-    metrics = forecaster.train_all_models()
-    print(f"Training metrics: {metrics}")
+    if args.mode in ['train', 'all']:
+        logger.info("🚀 Mode: TRAINING")
+        metrics = forecaster.train_all_models(
+            use_tuning=not args.no_tuning,
+            n_trials=args.trials,
+            days=args.days,
+            send_email=True
+        )
+        logger.info(f"✅ Training completed with metrics: {list(metrics.keys())}")
     
-    # Generate forecasts
-    forecasts = forecaster.predict_next_week()
-    forecaster.save_forecasts(forecasts)
-    print(f"Generated {len(forecasts)} forecasts")
+    if args.mode in ['predict', 'all']:
+        logger.info("🔮 Mode: PREDICTION")
+        # Dùng use_abc_filter=False để dự báo tất cả sản phẩm (cho đầy đủ báo cáo)
+        forecasts = forecaster.predict_next_week(use_abc_filter=False)
+        if len(forecasts) > 0:
+            forecaster.save_forecasts(forecasts, send_email=True)
+            logger.info(f"✅ Generated and saved {len(forecasts)} forecasts")
+        else:
+            logger.warning("⚠️ No forecasts generated")
+    
+    if args.mode in ['report', 'all']:
+        logger.info("📊 Mode: COMPREHENSIVE REPORT")
+        report = forecaster.generate_comprehensive_report()
+        logger.info(f"✅ Report generated with sections: {list(report['sections'].keys())}")

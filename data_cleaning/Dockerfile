@@ -17,8 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy code
 COPY *.py .
 
-# Create directories
+# Create directories (hỗ trợ cả csv và excel)
 RUN mkdir -p /csv_input /csv_output /csv_input/processed /csv_input/error
 
 # Default: run auto processor in continuous mode
-CMD ["python", "auto_process_csv.py", "--input", "/csv_input", "--output", "/csv_output", "--continuous"]
+CMD ["python", "auto_process_files.py", "--input", "/csv_input", "--output", "/csv_output", "--continuous"]
