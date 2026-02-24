@@ -4,6 +4,9 @@
     )
 }}
 
+-- Staging model cho products - chỉ select raw data từ ClickHouse
+-- Parsing được thực hiện trong stg_product_variant_parsing.sql
+
 WITH source AS (
     SELECT * FROM {{ source('retail_source', 'staging_products') }}
 ),
@@ -13,7 +16,7 @@ renamed AS (
         id AS product_id,
         ma_hang AS product_code,
         ma_vach AS barcode,
-        ten_hang AS product_name,
+        ten_hang AS product_name,           -- Raw name, chưa parse
         thuong_hieu AS brand,
         
         -- Phân loại 3 cấp

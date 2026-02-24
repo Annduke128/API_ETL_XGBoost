@@ -8,13 +8,13 @@ sources:
     
     tables:
       - name: staging_products
-        description: "Danh mục sản phẩm (staging từ PostgreSQL)"
+        description: "Danh mục sản phẩm (staging từ PostgreSQL). Parsing được thực hiện trong stg_product_variant_parsing.sql"
         columns:
           - name: id
           - name: ma_hang
             description: "Mã hàng"
           - name: ten_hang
-            description: "Tên hàng"
+            description: "Tên hàng (raw, chưa parse)"
           - name: thuong_hieu
             description: "Thương hiệu"
           - name: nhom_hang_cap_1

@@ -1,0 +1,6 @@
+type_code,type_code_2,type_name_vn,type_name_en,description,typical_area_m2,target_customer
+KPDT,UP,Cửa hàng khu phố đô thị,Urban Street Store,Cửa hàng trên đường phố khu đông dân cư đô thị,50-200,Khách đi bộ + xe máy
+KCC,AP,Cửa hàng khu chung cư,Apartment Complex Store,Cửa hàng trong hoặc gần khu chung cư căn hộ,30-100,Cư dân chung cư
+KCN,IZ,Cửa hàng khu công nghiệp,Industrial Zone Store,Cửa hàng phục vụ công nhân trong/gần KCN,80-300,Công nhân KCN
+CTT,TM,Cửa hàng chợ truyền thống,Traditional Market Store,Cửa hàng trong chợ truyền thống,15-50,Ngườ i mua sắm chợ
+KVNT,RL,Cửa hàng khu vực nông thôn,Rural Area Store,Cửa hàng ở xã huyện vùng nông thôn,40-150,Ngườ i dân địa phương

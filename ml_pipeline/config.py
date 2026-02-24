@@ -1,5 +1,5 @@
 """
-Configuration management cho ML Pipeline trên K3s
+Configuration management cho ML Pipeline
 """
 
 import os
@@ -33,7 +33,7 @@ class Config:
     MODEL_DIR = os.getenv('MODEL_DIR', '/app/models')
     PYTHONUNBUFFERED = os.getenv('PYTHONUNBUFFERED', '1')
     
-    # K8s specific
+    # Container info
     POD_NAME = os.getenv('HOSTNAME', '')
     NAMESPACE = os.getenv('NAMESPACE', 'default')
     
@@ -43,13 +43,8 @@ class Config:
     RANDOM_STATE = int(os.getenv('ML_RANDOM_STATE', '42'))
     
     @classmethod
-    def is_kubernetes(cls) -> bool:
-        """Check if running in Kubernetes"""
-        return os.path.exists('/var/run/secrets/kubernetes.io/serviceaccount/token')
-    
-    @classmethod
     def get_resource_limits(cls) -> Dict[str, Any]:
-        """Get CPU/Memory limits từ cgroup (K8s)"""
+        """Get CPU/Memory limits từ cgroup"""
         limits = {'cpu': 1, 'memory_gb': 4, 'detected': False}
         
         try:
@@ -108,7 +103,7 @@ class Config:
             'clickhouse_host': cls.CLICKHOUSE_HOST,
             'redis_host': cls.REDIS_HOST,
             'model_dir': cls.MODEL_DIR,
-            'is_kubernetes': cls.is_kubernetes(),
+
             'resource_limits': cls.get_resource_limits(),
             'pod_name': cls.POD_NAME,
             'namespace': cls.NAMESPACE,

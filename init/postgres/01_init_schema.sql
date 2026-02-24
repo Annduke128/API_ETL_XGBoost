@@ -11,11 +11,12 @@ CREATE TABLE IF NOT EXISTS branches (
 );
 
 -- Bảng danh mục hàng hóa
+-- Parsing (clean_name, weight, unit, packaging_type) được thực hiện trong DBT
 CREATE TABLE IF NOT EXISTS products (
     id SERIAL PRIMARY KEY,
     ma_hang VARCHAR(50) UNIQUE NOT NULL,
     ma_vach VARCHAR(100),
-    ten_hang VARCHAR(500),
+    ten_hang VARCHAR(500),              -- Raw product name (chưa parse)
     thuong_hieu VARCHAR(200),
     nhom_hang_cap_1 VARCHAR(200),
     nhom_hang_cap_2 VARCHAR(200),

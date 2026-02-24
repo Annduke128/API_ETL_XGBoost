@@ -1,5 +1,5 @@
 """
-Health check server cho Kubernetes probes
+Health check server
 Cung cấp /health, /ready, /metrics endpoints
 """
 

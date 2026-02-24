@@ -50,7 +50,7 @@ git config --global user.email "your.email@example.com"
 git remote -v
 
 # Nếu chưa có remote, thêm mới:
-git remote add origin https://github.com/YOUR_USERNAME/API_ETL_XGBoost.git
+git remote add origin https://github.com/annduke128/API_ETL_XGBoost.git
 ```
 
 ---

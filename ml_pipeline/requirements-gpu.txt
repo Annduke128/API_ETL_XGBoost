@@ -1,0 +1,14 @@
+# GPU-specific packages for RTX 3060
+
+# PyTorch with CUDA 12.1
+torch==2.1.0+cu121
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# XGBoost with GPU support
+xgboost==2.0.2
+
+# NVIDIA libraries (if needed for specific optimizations)
+nvidia-ml-py3==7.352.0
+
+# Additional ML libraries with GPU support
+# cuml-cu12  # Uncomment if using RAPIDS (requires more setup)

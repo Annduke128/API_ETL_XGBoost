@@ -443,3 +443,99 @@ Xem chi tiết trong `GIT_COMMIT_GUIDE.md`
 ---
 
 **Last Updated**: 2024-02-14
+
+---
+
+## 🧠 ML Pipeline Architecture
+
+### Batch Query Optimization
+
+Hệ thống ML đã được tối ưu để tránh N+1 query problem:
+
+```python
+# ❌ CŨ: N+1 Query (chậm)
+for product in products:           # ~1300 lần
+    for branch in branches:        # ~3 lần
+        query = f"SELECT * WHERE ma_hang = '{product}'"
+        df = client.query(query)   # 3900 queries!
+
+# ✅ MỚI: Batch Query (nhanh)
+products = ['SP001', 'SP002', ...]  # Top 15 ABC
+query = f"SELECT * WHERE ma_hang IN {products}"  # 1 query
+history_df = client.query(query)
+# Xử lý trong memory với pandas groupby
+```
+
+| Metric | Trước | Sau | Cải thiện |
+|--------|-------|-----|-----------|
+| Queries | ~3,900 | **2** | **~2000x** |
+| Thờigian | 5-10 phút | **5-10 giây** | **~100x** |
+
+### ABC-based Product Selection
+
+ML prediction chỉ tập trung vào sản phẩm có giá trị cao:
+
+```sql
+-- Logic: Phân loại ABC trong DBT (int_product_performance.sql)
+CASE 
+    WHEN cum_revenue_pct <= 0.8 THEN 'A'  -- Top 80% doanh thu
+    WHEN cum_revenue_pct <= 0.95 THEN 'B' -- 80-95% doanh thu
+    ELSE 'C'                               -- 95-100% doanh thu
+END as abc_class
+```
+
+| Class | Số lượng | % Doanh thu | ML Action |
+|-------|----------|-------------|-----------|
+| A | Top 5 | ~80% | Dự báo chi tiết |
+| B | Top 5 | ~15% | Dự báo chi tiết |
+| C | Top 5 | ~5% | Dự báo chi tiết |
+| Khác | ~1,285 | ~0% | Bỏ qua / Ước tính |
+
+### Adaptive Features
+
+Tự động điều chỉnh features dựa trên số ngày dữ liệu có sẵn:
+
+```python
+def create_features(self, df):
+    n_days = df['ngay'].nunique()
+    
+    # Chọn lag phù hợp với dữ liệu
+    if n_days >= 30:
+        available_lags = [1, 7, 14, 30]
+    elif n_days >= 14:
+        available_lags = [1, 7, 14]
+    elif n_days >= 7:
+        available_lags = [1, 7]
+    else:
+        available_lags = [1]
+    
+    # Tạo lag features
+    for lag in available_lags:
+        df[f'lag_{lag}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'].shift(lag)
+```
+
+### ML API Reference
+
+```python
+from ml_pipeline.xgboost_forecast import SalesForecaster
+
+# Khởi tạo
+forecaster = SalesForecaster(model_dir='/app/models')
+
+# Training với Optuna tuning
+metrics = forecaster.train_all_models(
+    use_tuning=True,
+    tuning_method='optuna',
+    n_trials=50,
+    days=365
+)
+
+# Prediction với ABC filter (mặc định)
+forecasts = forecaster.predict_next_week(
+    use_abc_filter=True,   # Chỉ dự báo Top 15 ABC
+    abc_top_n=5            # Top 5 từ mỗi loại
+)
+
+# Prediction tất cả sản phẩm (chậm)
+forecasts = forecaster.predict_next_week(use_abc_filter=False)
+```

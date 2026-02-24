@@ -1,6 +1,9 @@
 """
 Import DanhSachSanPham.csv vào PostgreSQL (bảng products)
 File này chỉ chứa thông tin sản phẩm, không phải giao dịch
+
+Lưu ý: Parsing tên sản phẩm (tách clean_name, weight, unit, packaging_type)
+được thực hiện trong DBT (stg_product_variant_parsing.sql)
 """
 
 import pandas as pd
@@ -37,7 +40,7 @@ def clean_numeric(value):
 
 
 def import_products(file_path):
-    """Import file DanhSachSanPham.csv"""
+    """Import file DanhSachSanPham.csv - raw data only, no parsing"""
     
     print(f"📖 Đọc file: {file_path}")
     df = pd.read_csv(file_path, encoding='utf-8-sig')
@@ -49,11 +52,11 @@ def import_products(file_path):
     df['nhom_hang_cap_2'] = [x[1] for x in nhom_hang_parsed]
     df['nhom_hang_cap_3'] = [x[2] for x in nhom_hang_parsed]
     
-    # Mapping cột
+    # Mapping cột - KHÔNG parse tên sản phẩm
     products_df = pd.DataFrame({
         'ma_hang': df['Mã hàng'].astype(str),
         'ma_vach': df['Mã vạch'].fillna('').astype(str),
-        'ten_hang': df['Tên hàng'].astype(str),
+        'ten_hang': df['Tên hàng'].astype(str),           # Raw name, chưa parse
         'thuong_hieu': df['Thương hiệu'].fillna('').astype(str),
         'nhom_hang_cap_1': df['nhom_hang_cap_1'],
         'nhom_hang_cap_2': df['nhom_hang_cap_2'],
@@ -65,8 +68,9 @@ def import_products(file_path):
     # Loại bỏ duplicate
     products_df = products_df.drop_duplicates(subset=['ma_hang'])
     print(f"✅ Sau khi loại bỏ duplicate: {len(products_df)} sản phẩm")
+    print(f"   Parsing sẽ được thực hiện trong DBT")
     
-    # Connect PostgreSQL - dùng env vars hoặc default service name
+    # Connect PostgreSQL
     pg = PostgreSQLConnector(
         host=os.getenv('POSTGRES_HOST', 'postgres'),
         database=os.getenv('POSTGRES_DB', 'retail_db'),
@@ -87,6 +91,7 @@ def import_products(file_path):
         products_df.to_sql('products', conn, if_exists='append', index=False)
     
     print(f"✅ Đã import {len(products_df)} sản phẩm vào PostgreSQL")
+    print(f"   Parsing sẽ được thực hiện trong DBT (stg_product_variant_parsing.sql)")
 
 
 if __name__ == '__main__':
