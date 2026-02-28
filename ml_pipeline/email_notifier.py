@@ -171,7 +171,7 @@ class EmailNotifier:
         return bool(re.match(pattern, email))
     
     def _send_email(self, subject: str, html_body: str, 
-                    attachments: Optional[List[Tuple[str, str]]] = None,
+                    attachments: Optional[List[Tuple]] = None,
                     report_type: Optional[str] = None) -> bool:
         """
         Gửi email với HTML content và attachments
@@ -179,7 +179,8 @@ class EmailNotifier:
         Args:
             subject: Tiêu đề email
             html_body: Nội dung HTML
-            attachments: List các tuple (file_path, filename)
+            attachments: List các tuple (file_path, filename, cid) hoặc (file_path, filename)
+                       cid: Content-ID cho inline image (None nếu là attachment thường)
             report_type: Loại báo cáo để xác định ngườ i nhận
         
         Returns:
@@ -203,8 +204,8 @@ class EmailNotifier:
         
         sender_name = smtp_config.get('sender_name', 'ML Pipeline System')
         
-        # Tạo message
-        msg = MIMEMultipart('alternative')
+        # Tạo message với 'related' để hỗ trợ inline images
+        msg = MIMEMultipart('related')
         msg['Subject'] = subject
         msg['From'] = f"{sender_name} <{sender_email}>"
         msg['To'] = ', '.join(recipients)
@@ -214,16 +215,30 @@ class EmailNotifier:
         
         # Thêm attachments
         if attachments:
-            for file_path, filename in attachments:
+            for attachment in attachments:
+                # Handle both old format (path, filename) and new format (path, filename, cid)
+                if len(attachment) == 3:
+                    file_path, filename, cid = attachment
+                else:
+                    file_path, filename = attachment
+                    cid = None
+                
                 if os.path.exists(file_path):
                     with open(file_path, 'rb') as f:
                         part = MIMEBase('application', 'octet-stream')
                         part.set_payload(f.read())
                     encoders.encode_base64(part)
-                    part.add_header(
-                        'Content-Disposition',
-                        f'attachment; filename= "{filename}"'
-                    )
+                    
+                    if cid:
+                        # Inline image với Content-ID
+                        part.add_header('Content-ID', f'<{cid}>')
+                        part.add_header('Content-Disposition', 'inline')
+                    else:
+                        # Regular attachment
+                        part.add_header(
+                            'Content-Disposition',
+                            f'attachment; filename="{filename}"'
+                        )
                     msg.attach(part)
         
         # Gửi email với retry
@@ -293,12 +308,12 @@ class EmailNotifier:
         # Tạo HTML body
         html_body = self._create_training_html(metrics, training_duration, timestamp)
         
-        # Chuẩn bị attachments
+        # Chuẩn bị attachments (file_path, filename, cid=None)
         attachments = []
         if self.config.get('advanced', {}).get('attach_metrics_file', True):
             metrics_path = os.path.join(model_dir, 'training_metrics.json')
             if os.path.exists(metrics_path):
-                attachments.append((metrics_path, 'training_metrics.json'))
+                attachments.append((metrics_path, 'training_metrics.json', None))
         
         return self._send_email(subject, html_body, attachments, report_type='training_report')
     
@@ -550,22 +565,31 @@ class EmailNotifier:
         )
         subject = f"{subject_prefix} - {timestamp}"
         
-        # Tạo HTML body
-        html_body = self._create_forecast_html(forecasts, inventory_recommendations, timestamp)
+        # Tạo HTML body và lấy logo info
+        html_body, logo_cid, logo_path = self._create_forecast_html(forecasts, inventory_recommendations, timestamp)
         
         # Chuẩn bị attachments
         attachments = []
+        
+        # Đính kèm logo nếu có
+        if logo_cid and logo_path and os.path.exists(logo_path):
+            attachments.append((logo_path, 'hasu_logo.png', logo_cid))
+        
+        # Đính kèm file forecasts
         if self.config.get('advanced', {}).get('attach_forecasts_file', True):
-            # Lưu forecasts tạm thờ i để đính kèm
             temp_path = '/tmp/forecasts_latest.csv'
             forecasts.to_csv(temp_path, index=False)
-            attachments.append((temp_path, 'forecasts_latest.csv'))
+            attachments.append((temp_path, 'forecasts_latest.csv', None))
         
         return self._send_email(subject, html_body, attachments, report_type='forecast_report')
     
     def _create_forecast_html(self, forecasts: pd.DataFrame, 
-                             inventory_recs: Optional[List[Dict]], timestamp: str) -> str:
-        """Tạo HTML cho forecast report - Bản dự báo doanh số HASU"""
+                             inventory_recs: Optional[List[Dict]], timestamp: str) -> tuple:
+        """Tạo HTML cho forecast report - Bản dự báo doanh số HASU
+        
+        Returns:
+            tuple: (html_body, logo_cid, logo_path)
+        """
         
         # Tính tổng hợp dự báo
         total_forecasted_qty = forecasts['predicted_quantity'].sum() if 'predicted_quantity' in forecasts.columns else 0
@@ -678,15 +702,21 @@ class EmailNotifier:
         else:
             date_range = "N/A"
         
-        # Logo URL - Cấu hình qua biến môi trường HASU_LOGO_URL
-        # Upload logo của bạn lên: Imgur, Cloudinary, AWS S3, GitHub, v.v.
-        # Ví dụ: https://i.imgur.com/xxxxx.png
-        logo_url = os.getenv('HASU_LOGO_URL', '')
+        # Logo path - Đường dẫn file local
+        # Có thể cấu hình qua biến môi trường HASU_LOGO_PATH
+        # Hoặc đặt file logo tại: /app/assets/hasu_logo.png (trong container)
+        logo_path = os.getenv('HASU_LOGO_PATH', '/app/assets/hasu_logo.png')
         
-        # Nếu không có logo URL, dùng text header
-        if logo_url:
-            logo_html = f'<img src="{logo_url}" alt="HASU Logo" style="max-height: 60px; margin-bottom: 10px; background: white; padding: 5px; border-radius: 5px;">'
+        # Kiểm tra file logo tồn tại
+        logo_exists = os.path.exists(logo_path)
+        logo_cid = None
+        
+        if logo_exists:
+            # Sử dụng CID reference cho attached image
+            logo_cid = "hasu_logo"
+            logo_html = f'<img src="cid:{logo_cid}" alt="HASU Logo" style="max-height: 60px; margin-bottom: 10px; background: white; padding: 5px; border-radius: 5px;">'
         else:
+            # Fallback: dùng text header
             logo_html = '<div style="font-size: 36px; font-weight: bold; margin-bottom: 10px;">🏪 HASU</div>'
         
         html = f"""
@@ -801,7 +831,7 @@ class EmailNotifier:
         </body>
         </html>
         """
-        return html
+        return html, logo_cid, (logo_path if logo_exists else None)
     
     def send_error_alert(self, error_message: str, context: str = "") -> bool:
         """
