@@ -10,15 +10,15 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Cài đặt Python dependencies
-COPY requirements.txt .
+COPY docker/ml_pipeline/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Tạo thư mục models
 RUN mkdir -p /app/models
 
-# Copy source code
-COPY *.py .
-COPY *.yaml .
+# Copy source code từ ml_pipeline/
+COPY ml_pipeline/*.py .
+COPY ml_pipeline/*.yaml .
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

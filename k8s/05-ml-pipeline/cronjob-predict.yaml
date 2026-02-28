@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ml-predict
+  namespace: hasu-ml
+spec:
+  schedule: "0 6 * * *"  # Daily at 6 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: ml-predict
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: dockerhub-credentials
+          containers:
+          - name: ml-predict
+            image: your-dockerhub-user/hasu-ml-pipeline:latest
+            imagePullPolicy: Always  # Always pull latest for auto-update
+            command: ["python", "-c"]
+            args:
+            - |
+              from xgboost_forecast import SalesForecaster
+              f = SalesForecaster()
+              p = f.predict_next_week()
+              f.save_forecasts(p)
+            envFrom:
+            - configMapRef:
+                name: hasu-ml-config
+            - secretRef:
+                name: hasu-ml-secrets
+            volumeMounts:
+            - name: ml-models
+              mountPath: /app/models
+            resources:
+              requests:
+                memory: "1Gi"
+                cpu: "500m"
+              limits:
+                memory: "4Gi"
+                cpu: "2000m"
+          volumes:
+          - name: ml-models
+            persistentVolumeClaim:
+              claimName: ml-models

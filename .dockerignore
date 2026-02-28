@@ -1,0 +1,57 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+
+# Virtual environments
+venv/
+.env
+.venv
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files
+csv_input/
+csv_output/
+*.csv
+*.xlsx
+*.xls
+
+# Models
+models/
+*.pkl
+*.joblib
+
+# Logs
+logs/
+*.log
+
+# Temp
+tmp/
+temp/
+
+# K3s manifests (not needed in images)
+k8s/
+
+# Archive
+archive/

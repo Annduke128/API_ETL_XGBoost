@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hasu-ml
+  labels:
+    name: hasu-ml
+    environment: production
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: hasu-ml-quota
+  namespace: hasu-ml
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: 64Gi
+    limits.cpu: "40"
+    limits.memory: 128Gi
+    persistentvolumeclaims: "20"

@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hasu-ml-config
+  namespace: hasu-ml
+data:
+  # PostgreSQL
+  POSTGRES_HOST: "postgres.hasu-ml.svc.cluster.local"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "retail_db"
+  POSTGRES_USER: "retail_user"
+  
+  # ClickHouse
+  CLICKHOUSE_HOST: "clickhouse.hasu-ml.svc.cluster.local"
+  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_DB: "retail_dw"
+  CLICKHOUSE_USER: "default"
+  
+  # Redis
+  REDIS_HOST: "redis.hasu-ml.svc.cluster.local"
+  REDIS_PORT: "6379"
+  
+  # Airflow
+  AIRFLOW__CORE__EXECUTOR: "LocalExecutor"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:airflow@postgres.hasu-ml.svc.cluster.local:5432/airflow"
+  
+  # ML Pipeline
+  ML_TRIALS: "50"
+  ML_CV_SPLITS: "3"
+  ML_RANDOM_STATE: "42"
+  MODEL_DIR: "/app/models"
+  
+  # Email
+  EMAIL_SENDER: "ml-pipeline@hasu.com"
+  EMAIL_TRAINING_REPORT: "team@hasu.com"
+  EMAIL_FORECAST_REPORT: "team@hasu.com"
+  EMAIL_ERROR_ALERT: "admin@hasu.com"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: hasu-ml
+data:
+  init.sql: |
+    CREATE DATABASE IF NOT EXISTS airflow;
+    CREATE USER IF NOT EXISTS airflow WITH PASSWORD 'airflow';
+    GRANT ALL PRIVILEGES ON DATABASE airflow TO airflow;
+    \c airflow;
+    GRANT ALL ON SCHEMA public TO airflow;

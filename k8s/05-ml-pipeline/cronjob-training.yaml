@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ml-training
+  namespace: hasu-ml
+spec:
+  schedule: "0 2 * * 0"  # Weekly on Sunday at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: ml-training
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: dockerhub-credentials
+          containers:
+          - name: ml-training
+            image: your-dockerhub-user/hasu-ml-pipeline:latest
+            imagePullPolicy: Always  # Always pull latest for auto-update
+            command: ["python", "train_models.py"]
+            args: ["--trials", "50"]
+            envFrom:
+            - configMapRef:
+                name: hasu-ml-config
+            - secretRef:
+                name: hasu-ml-secrets
+            volumeMounts:
+            - name: ml-models
+              mountPath: /app/models
+            resources:
+              requests:
+                memory: "2Gi"
+                cpu: "1000m"
+              limits:
+                memory: "8Gi"
+                cpu: "4000m"
+          volumes:
+          - name: ml-models
+            persistentVolumeClaim:
+              claimName: ml-models

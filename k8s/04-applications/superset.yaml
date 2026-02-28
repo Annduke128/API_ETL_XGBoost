@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset
+  namespace: hasu-ml
+  labels:
+    app: superset
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: superset
+  template:
+    metadata:
+      labels:
+        app: superset
+    spec:
+      initContainers:
+      - name: superset-init
+        image: apache/superset:3.0.0
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          superset db upgrade && \
+          superset init && \
+          superset fab create-admin \
+            --username admin \
+            --firstname Admin \
+            --lastname User \
+            --email admin@hasu.com \
+            --password admin || true
+        envFrom:
+        - configMapRef:
+            name: hasu-ml-config
+        - secretRef:
+            name: hasu-ml-secrets
+      containers:
+      - name: superset
+        image: apache/superset:3.0.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8088
+        envFrom:
+        - configMapRef:
+            name: hasu-ml-config
+        - secretRef:
+            name: hasu-ml-secrets
+        env:
+        - name: SUPERSET_ENV
+          value: "production"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8088
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8088
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: superset
+  namespace: hasu-ml
+spec:
+  selector:
+    app: superset
+  ports:
+  - port: 8088
+    targetPort: 8088
+    nodePort: 30088
+  type: NodePort

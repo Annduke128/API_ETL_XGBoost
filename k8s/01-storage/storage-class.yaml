@@ -1,0 +1,17 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-storage
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-ssd
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  nodePath: /opt/ssd-storage

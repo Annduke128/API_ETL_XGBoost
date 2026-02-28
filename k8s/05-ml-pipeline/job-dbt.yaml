@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dbt-run
+  namespace: hasu-ml
+spec:
+  template:
+    metadata:
+      labels:
+        app: dbt
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+      - name: dockerhub-credentials
+      containers:
+      - name: dbt
+        image: your-dockerhub-user/hasu-dbt:latest
+        imagePullPolicy: Always
+        command: ["dbt"]
+        args: 
+        - "run"
+        - "--target"
+        - "clickhouse"
+        envFrom:
+        - configMapRef:
+            name: hasu-ml-config
+        - secretRef:
+            name: hasu-ml-secrets
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+---
+# CronJob để chạy DBT định kỳ
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dbt-daily
+  namespace: hasu-ml
+spec:
+  schedule: "0 3 * * *"  # Daily at 3 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: dockerhub-credentials
+          containers:
+          - name: dbt
+            image: your-dockerhub-user/hasu-dbt:latest
+            imagePullPolicy: Always
+            command: ["dbt"]
+            args: 
+            - "build"
+            - "--select"
+            - "staging,marts"
+            - "--target"
+            - "clickhouse"
+            envFrom:
+            - configMapRef:
+                name: hasu-ml-config
+            - secretRef:
+                name: hasu-ml-secrets
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "250m"
+              limits:
+                memory: "2Gi"
+                cpu: "1000m"

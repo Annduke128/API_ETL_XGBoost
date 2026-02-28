@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-webserver
+  namespace: hasu-ml
+  labels:
+    app: airflow-webserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-webserver
+  template:
+    metadata:
+      labels:
+        app: airflow-webserver
+    spec:
+      initContainers:
+      - name: airflow-init
+        image: apache/airflow:2.8.0
+        imagePullPolicy: IfNotPresent
+        args: ["db", "init"]
+        envFrom:
+        - configMapRef:
+            name: hasu-ml-config
+        - secretRef:
+            name: hasu-ml-secrets
+      containers:
+      - name: airflow-webserver
+        image: apache/airflow:2.8.0
+        imagePullPolicy: IfNotPresent
+        args: ["webserver"]
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: hasu-ml-config
+        - secretRef:
+            name: hasu-ml-secrets
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-scheduler
+  namespace: hasu-ml
+  labels:
+    app: airflow-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-scheduler
+  template:
+    metadata:
+      labels:
+        app: airflow-scheduler
+    spec:
+      containers:
+      - name: airflow-scheduler
+        image: apache/airflow:2.8.0
+        imagePullPolicy: IfNotPresent
+        args: ["scheduler"]
+        envFrom:
+        - configMapRef:
+            name: hasu-ml-config
+        - secretRef:
+            name: hasu-ml-secrets
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow
+  namespace: hasu-ml
+spec:
+  selector:
+    app: airflow-webserver
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30080
+  type: NodePort

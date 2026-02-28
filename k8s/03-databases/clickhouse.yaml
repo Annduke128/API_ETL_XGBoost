@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickhouse
+  namespace: hasu-ml
+  labels:
+    app: clickhouse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      containers:
+      - name: clickhouse
+        image: clickhouse/clickhouse-server:24-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8123
+          name: http
+        - containerPort: 9000
+          name: native
+        env:
+        - name: CLICKHOUSE_DB
+          valueFrom:
+            configMapKeyRef:
+              name: hasu-ml-config
+              key: CLICKHOUSE_DB
+        - name: CLICKHOUSE_USER
+          valueFrom:
+            configMapKeyRef:
+              name: hasu-ml-config
+              key: CLICKHOUSE_USER
+        - name: CLICKHOUSE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: hasu-ml-secrets
+              key: CLICKHOUSE_PASSWORD
+        volumeMounts:
+        - name: clickhouse-data
+          mountPath: /var/lib/clickhouse
+        - name: clickhouse-logs
+          mountPath: /var/log/clickhouse-server
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+        livenessProbe:
+          httpGet:
+            path: /ping
+            port: 8123
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ping
+            port: 8123
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: clickhouse-data
+        persistentVolumeClaim:
+          claimName: clickhouse-data
+      - name: clickhouse-logs
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: hasu-ml
+spec:
+  selector:
+    app: clickhouse
+  ports:
+  - port: 8123
+    targetPort: 8123
+    name: http
+  - port: 9000
+    targetPort: 9000
+    name: native
+  type: ClusterIP

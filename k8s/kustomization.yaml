@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hasu-ml
+
+resources:
+  # Namespace
+  - 00-namespace/namespace.yaml
+  - 00-namespace/network-policy.yaml
+  
+  # Storage
+  - 01-storage/storage-class.yaml
+  - 01-storage/postgres-pvc.yaml
+  - 01-storage/clickhouse-pvc.yaml
+  - 01-storage/ml-models-pvc.yaml
+  
+  # Config
+  - 02-config/configmap.yaml
+  
+  # Databases
+  - 03-databases/postgres.yaml
+  - 03-databases/redis.yaml
+  - 03-databases/clickhouse.yaml
+  
+  # Applications
+  - 04-applications/airflow.yaml
+  - 04-applications/superset.yaml
+  
+  # ML Pipeline
+  - 05-ml-pipeline/cronjob-training.yaml
+  - 05-ml-pipeline/cronjob-predict.yaml
+
+# Images to be replaced by kustomize
+images:
+  - name: your-dockerhub-user/hasu-ml-pipeline
+    newName: your-dockerhub-user/hasu-ml-pipeline
+    newTag: latest
