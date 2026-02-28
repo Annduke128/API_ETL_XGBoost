@@ -70,8 +70,8 @@ class EmailNotifier:
                 'error_alert': {'enabled': True, 'subject_prefix': '[ML Pipeline] ERROR Alert'}
             },
             'content': {
-                'top_trending_products': 10,
-                'top_inventory_alerts': 10,
+                'top_trending_products': 50,  # Tăng lên 50 sản phẩm
+                'top_inventory_alerts': 50,
                 'date_format': '%d/%m/%Y %H:%M',
                 'timezone': 'Asia/Ho_Chi_Minh'
             },
@@ -565,84 +565,110 @@ class EmailNotifier:
     
     def _create_forecast_html(self, forecasts: pd.DataFrame, 
                              inventory_recs: Optional[List[Dict]], timestamp: str) -> str:
-        """Tạo HTML cho forecast report"""
+        """Tạo HTML cho forecast report - Bản dự báo doanh số HASU"""
         
         # Tính tổng hợp dự báo
         total_forecasted_qty = forecasts['predicted_quantity'].sum() if 'predicted_quantity' in forecasts.columns else 0
         total_forecasted_rev = forecasts['predicted_revenue'].sum() if 'predicted_revenue' in forecasts.columns else 0
         
-        # Top sản phẩm có xu hướng tăng (predicted cao nhất)
-        n_top = self.config.get('content', {}).get('top_trending_products', 10)
-        if 'predicted_quantity' in forecasts.columns and 'ma_hang' in forecasts.columns:
-            # Group by product và lấy thông tin
-            product_cols = ['ma_hang', 'predicted_quantity']
-            if 'ten_san_pham' in forecasts.columns:
-                product_cols.append('ten_san_pham')
-            if 'nhom_hang_cap_1' in forecasts.columns:
-                product_cols.append('nhom_hang_cap_1')
+        # Số sản phẩm hiển thị (50)
+        n_top = self.config.get('content', {}).get('top_trending_products', 50)
+        
+        # Tạo bảng kết hợp Top 50 sản phẩm
+        combined_table_html = ""
+        
+        if 'ma_hang' in forecasts.columns:
+            # Chuẩn bị dữ liệu
+            product_data = []
             
-            product_summary = forecasts.groupby('ma_hang').agg({
-                'predicted_quantity': 'sum',
-                'ten_san_pham': 'first' if 'ten_san_pham' in forecasts.columns else lambda x: '',
-                'nhom_hang_cap_1': 'first' if 'nhom_hang_cap_1' in forecasts.columns else lambda x: ''
-            }).sort_values('predicted_quantity', ascending=False).head(n_top)
+            # Group by product
+            grouped = forecasts.groupby('ma_hang')
             
-            top_products_html = ""
-            for i, (product, row) in enumerate(product_summary.iterrows(), 1):
-                qty = row['predicted_quantity']
-                name = row.get('ten_san_pham', '') if 'ten_san_pham' in row else ''
-                cat = row.get('nhom_hang_cap_1', '')[:25] if 'nhom_hang_cap_1' in row else ''
+            for product_code, group in grouped:
+                # Lấy thông tin cơ bản
+                name = group['ten_san_pham'].iloc[0] if 'ten_san_pham' in group.columns else ''
+                category = group['nhom_hang_cap_1'].iloc[0] if 'nhom_hang_cap_1' in group.columns else ''
                 
-                top_products_html += f"""
+                # Dự báo tuần tới (predicted_quantity)
+                forecast_next_week = group['predicted_quantity'].sum() if 'predicted_quantity' in group.columns else 0
+                
+                # Số lượng bán 1 tuần qua (last_week_sales)
+                last_week_sales = group['last_week_sales'].iloc[0] if 'last_week_sales' in group.columns else 0
+                
+                # Tính xu hướng (tăng/giảm)
+                if last_week_sales > 0:
+                    trend_pct = ((forecast_next_week - last_week_sales) / last_week_sales) * 100
+                else:
+                    trend_pct = 100 if forecast_next_week > 0 else 0
+                
+                if trend_pct > 5:
+                    trend_icon = '📈'
+                    trend_class = 'trend-up'
+                    trend_text = f'+{trend_pct:.1f}%'
+                elif trend_pct < -5:
+                    trend_icon = '📉'
+                    trend_class = 'trend-down'
+                    trend_text = f'{trend_pct:.1f}%'
+                else:
+                    trend_icon = '➡️'
+                    trend_class = 'trend-stable'
+                    trend_text = f'{trend_pct:.1f}%'
+                
+                # Tồn kho tối ưu (safety_stock từ inventory_recs)
+                optimal_stock = 0
+                suggested_order = 0
+                
+                if inventory_recs:
+                    for rec in inventory_recs:
+                        if rec.get('product_code') == product_code:
+                            optimal_stock = rec.get('safety_stock', 0)
+                            suggested_order = rec.get('suggested_order_quantity', 0)
+                            break
+                
+                # Nếu không có trong inventory_recs, tính từ forecast
+                if optimal_stock == 0 and forecast_next_week > 0:
+                    optimal_stock = int(forecast_next_week * 1.5)  # 1.5x dự báo
+                    suggested_order = int(forecast_next_week * 2)  # 2x dự báo
+                
+                product_data.append({
+                    'code': product_code,
+                    'name': name,
+                    'category': category,
+                    'last_week_sales': last_week_sales,
+                    'trend_icon': trend_icon,
+                    'trend_class': trend_class,
+                    'trend_text': trend_text,
+                    'optimal_stock': optimal_stock,
+                    'forecast_next_week': forecast_next_week,
+                    'suggested_order': suggested_order
+                })
+            
+            # Sắp xếp theo dự báo giảm dần
+            product_data.sort(key=lambda x: x['forecast_next_week'], reverse=True)
+            
+            # Tạo HTML cho bảng (top 50)
+            for i, p in enumerate(product_data[:n_top], 1):
+                # Màu cho xu hướng
+                trend_color = '#4caf50' if 'up' in p['trend_class'] else ('#f44336' if 'down' in p['trend_class'] else '#757575')
+                
+                combined_table_html += f"""
                     <tr>
-                        <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center; color: #999;">{i}</td>
-                        <td style="padding: 12px; border-bottom: 1px solid #e0e0e0;">
-                            <div style="font-size: 15px; font-weight: 600; color: #333; line-height: 1.4;">{name}</div>
-                            <div style="font-size: 11px; color: #999; margin-top: 3px;">Mã SP: {product}</div>
+                        <td style="padding: 10px; border-bottom: 1px solid #e0e0e0; text-align: center; color: #999; font-size: 12px;">{i}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #e0e0e0;">
+                            <div style="font-size: 14px; font-weight: 600; color: #333; line-height: 1.3;">{p['name']}</div>
+                            <div style="font-size: 10px; color: #999; margin-top: 2px;">{p['code']}</div>
                         </td>
-                        <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; color: #666; font-size: 13px;">{cat}</td>
-                        <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: right; font-weight: bold; font-size: 15px; color: #11998e;">{int(qty):,}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #e0e0e0; color: #666; font-size: 12px;">{p['category']}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #e0e0e0; text-align: right; font-size: 13px; color: #333;">{int(p['last_week_sales']):,}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #e0e0e0; text-align: center; font-size: 13px;">
+                            <span style="color: {trend_color}; font-weight: 600;">{p['trend_icon']} {p['trend_text']}</span>
+                        </td>
+                        <td style="padding: 10px; border-bottom: 1px solid #e0e0e0; text-align: right; font-size: 13px; color: #ff9800; font-weight: 500;">{int(p['optimal_stock']):,}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #e0e0e0; text-align: right; font-size: 13px; color: #11998e; font-weight: 600;">{int(p['suggested_order']):,}</td>
                     </tr>
                 """
         else:
-            top_products_html = '<tr><td colspan="4" style="text-align: center; color: #999;">Không có dữ liệu</td></tr>'
-        
-        # Khuyến nghị tồn kho
-        inventory_html = ""
-        if inventory_recs:
-            n_alerts = self.config.get('content', {}).get('top_inventory_alerts', 10)
-            for i, rec in enumerate(inventory_recs[:n_alerts], 1):
-                urgency_color = '#f44336' if rec.get('reorder_urgency') == 'High' else '#ff9800'
-                product_code = rec.get('product_code', 'N/A')
-                product_name = rec.get('product_name', '')[:30] if 'product_name' in rec else ''
-                category = rec.get('category', '')
-                
-                inventory_html += f"""
-                    <div style="background: #fff8e1; border-left: 4px solid {urgency_color}; 
-                                padding: 12px; margin: 8px 0; border-radius: 4px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <span style="font-weight: 600; color: #333;">{product_code}</span><br>
-                                <small style="color: #666;">{product_name}</small>
-                            </div>
-                            <span style="background: {urgency_color}; color: white; padding: 2px 8px; 
-                                        border-radius: 4px; font-size: 11px;">
-                                {rec.get('reorder_urgency', 'Normal')}
-                            </span>
-                        </div>
-                        <div style="font-size: 13px; color: #666; margin-top: 5px;">
-                            Category: {category} | 
-                            Dự báo 7 ngày: <strong>{rec.get('predicted_7_days', 0):,.0f}</strong> units | 
-                            Margin: <strong>{rec.get('predicted_margin_pct', 0):.1f}%</strong>
-                        </div>
-                        <div style="font-size: 12px; color: #999; margin-top: 3px;">
-                            Safety Stock: {rec.get('safety_stock', 0):,} | 
-                            Đề xuất đặt: {rec.get('suggested_order_quantity', 0):,}
-                        </div>
-                    </div>
-                """
-        else:
-            inventory_html = '<p style="color: #999; text-align: center;">Không có khuyến nghị tồn kho đặc biệt</p>'
+            combined_table_html = '<tr><td colspan="7" style="text-align: center; color: #999; padding: 20px;">Không có dữ liệu dự báo</td></tr>'
         
         # Date range
         if 'forecast_date' in forecasts.columns:
@@ -652,6 +678,17 @@ class EmailNotifier:
         else:
             date_range = "N/A"
         
+        # Logo URL - Cấu hình qua biến môi trường HASU_LOGO_URL
+        # Upload logo của bạn lên: Imgur, Cloudinary, AWS S3, GitHub, v.v.
+        # Ví dụ: https://i.imgur.com/xxxxx.png
+        logo_url = os.getenv('HASU_LOGO_URL', '')
+        
+        # Nếu không có logo URL, dùng text header
+        if logo_url:
+            logo_html = f'<img src="{logo_url}" alt="HASU Logo" style="max-height: 60px; margin-bottom: 10px; background: white; padding: 5px; border-radius: 5px;">'
+        else:
+            logo_html = '<div style="font-size: 36px; font-weight: bold; margin-bottom: 10px;">🏪 HASU</div>'
+        
         html = f"""
         <!DOCTYPE html>
         <html>
@@ -659,88 +696,105 @@ class EmailNotifier:
             <meta charset="UTF-8">
             <style>
                 body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 800px; margin: 0 auto; padding: 20px; }}
-                .header {{ background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); 
-                          color: white; padding: 30px; border-radius: 10px 10px 0 0; text-align: center; }}
-                .header h1 {{ margin: 0; font-size: 24px; }}
+                .container {{ max-width: 1000px; margin: 0 auto; padding: 20px; }}
+                .header {{ background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
+                          color: white; padding: 20px; border-radius: 10px 10px 0 0; text-align: center; }}
+                .header img {{ max-height: 60px; margin-bottom: 10px; }}
+                .header h1 {{ margin: 0; font-size: 28px; font-weight: 600; letter-spacing: 1px; }}
+                .header .subtitle {{ margin: 8px 0 0 0; font-size: 16px; opacity: 0.9; }}
                 .content {{ background: #ffffff; padding: 30px; border-radius: 0 0 10px 10px; 
                            box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
                 .stats {{ display: flex; justify-content: space-around; margin: 20px 0; flex-wrap: wrap; }}
-                .stat-box {{ text-align: center; padding: 20px; background: #f5f5f5; 
+                .stat-box {{ text-align: center; padding: 15px; background: #f5f5f5; 
                             border-radius: 8px; min-width: 150px; margin: 5px; }}
-                .stat-value {{ font-size: 24px; font-weight: bold; color: #11998e; }}
-                .stat-label {{ font-size: 12px; color: #666; margin-top: 5px; }}
-                table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-                th {{ background: #e8f5e9; padding: 12px; text-align: left; 
-                      font-weight: 600; color: #2e7d32; border-bottom: 2px solid #4caf50; }}
+                .stat-value {{ font-size: 22px; font-weight: bold; color: #2a5298; }}
+                .stat-label {{ font-size: 11px; color: #666; margin-top: 5px; text-transform: uppercase; }}
+                table {{ width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 13px; }}
+                th {{ background: #2a5298; padding: 12px 10px; text-align: left; 
+                      font-weight: 600; color: white; border-bottom: 2px solid #1e3c72; font-size: 12px; }}
+                th:nth-child(4), th:nth-child(5), th:nth-child(6), th:nth-child(7) {{ text-align: right; }}
+                td:nth-child(4), td:nth-child(6), td:nth-child(7) {{ text-align: right; }}
                 .footer {{ text-align: center; margin-top: 30px; padding-top: 20px; 
-                          border-top: 1px solid #eee; color: #999; font-size: 12px; }}
+                          border-top: 1px solid #eee; color: #999; font-size: 11px; }}
+                .trend-up {{ color: #4caf50; }}
+                .trend-down {{ color: #f44336; }}
+                .trend-stable {{ color: #757575; }}
+                .legend {{ background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0; font-size: 12px; }}
+                .legend-item {{ display: inline-block; margin-right: 20px; }}
             </style>
         </head>
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>🔮 Forecast &amp; Inventory Report</h1>
-                    <p>Báo cáo dự báo bán hàng và khuyến nghị tồn kho</p>
+                    {logo_html}
+                    <h1>BẢN DỰ BÁO DOANH SỐ HASU</h1>
+                    <div class="subtitle">Kì dự đoán: {date_range}</div>
                 </div>
                 
                 <div class="content">
                     <div class="stats">
                         <div class="stat-box">
                             <div class="stat-value">{len(forecasts):,}</div>
-                            <div class="stat-label">Forecast Records</div>
+                            <div class="stat-label">Bản ghi dự báo</div>
                         </div>
                         <div class="stat-box">
                             <div class="stat-value">{int(total_forecasted_qty):,}</div>
-                            <div class="stat-label">Total Predicted Qty</div>
+                            <div class="stat-label">Tổng SL dự báo</div>
                         </div>
                         <div class="stat-box">
-                            <div class="stat-value">{total_forecasted_rev/1e6:.2f}M</div>
-                            <div class="stat-label">Total Predicted Revenue</div>
+                            <div class="stat-value">{total_forecasted_rev/1e6:.1f}M</div>
+                            <div class="stat-label">Doanh thu dự báo</div>
                         </div>
                         <div class="stat-box">
-                            <div class="stat-value">{date_range}</div>
-                            <div class="stat-label">Forecast Period</div>
+                            <div class="stat-value">{n_top}</div>
+                            <div class="stat-label">Top sản phẩm</div>
                         </div>
                     </div>
                     
-                    <h3 style="color: #333; border-bottom: 2px solid #11998e; padding-bottom: 10px;">
-                        📈 Top {self.config.get('content', {}).get('top_trending_products', 10)} Sản phẩm có nhu cầu cao
+                    <div class="legend">
+                        <strong>Chú thích:</strong>
+                        <span class="legend-item">📈 Tăng trưởng</span>
+                        <span class="legend-item">📉 Giảm</span>
+                        <span class="legend-item">➡️ Ổn định</span>
+                        <span class="legend-item" style="color: #ff9800;">■ Tồn kho tối ưu</span>
+                        <span class="legend-item" style="color: #11998e;">■ SL đề xuất đặt</span>
+                    </div>
+                    
+                    <h3 style="color: #1e3c72; border-bottom: 3px solid #2a5298; padding-bottom: 10px; margin-top: 20px;">
+                        📊 TOP {n_top} SẢN PHẨM BÁN CHẠY DỰ KIẾN
                     </h3>
                     
                     <table>
                         <thead>
                             <tr>
-                                <th style="width: 50px;">#</th>
-                                <th>Tên sản phẩm</th>
-                                <th style="width: 150px;">Category</th>
-                                <th style="text-align: right; width: 120px;">Dự báo</th>
+                                <th style="width: 40px; text-align: center;">#</th>
+                                <th style="width: 25%;">Tên sản phẩm</th>
+                                <th style="width: 15%;">Danh mục</th>
+                                <th style="width: 12%; text-align: right;">Bán tuần qua</th>
+                                <th style="width: 12%; text-align: center;">Xu hướng</th>
+                                <th style="width: 12%; text-align: right;">Tồn kho tối ưu</th>
+                                <th style="width: 12%; text-align: right;">Đề xuất đặt tuần tới</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {top_products_html}
+                            {combined_table_html}
                         </tbody>
                     </table>
                     
-                    <h3 style="color: #333; border-bottom: 2px solid #11998e; padding-bottom: 10px; margin-top: 30px;">
-                        📦 Khuyến nghị tồn kho
-                    </h3>
-                    
-                    {inventory_html}
-                    
-                    <div style="background: #e3f2fd; border-left: 4px solid #2196f3; 
+                    <div style="background: #e8f5e9; border-left: 4px solid #4caf50; 
                                 padding: 15px; margin: 20px 0; border-radius: 4px;">
-                        <h4 style="margin: 0 0 10px 0; color: #1565c0;">💡 Hướng dẫn sử dụng</h4>
-                        <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #555;">
-                            <li><strong>Safety Stock:</strong> Mức tồn kho an toàn để tránh hết hàng (1.5x nhu cầu 7 ngày)</li>
-                            <li><strong>Reorder Point:</strong> Ngưỡng cần đặt hàng lại (nhu cầu 2 tuần)</li>
-                            <li><strong>High Urgency:</strong> Sản phẩm cần ưu tiên đặt hàng ngay</li>
+                        <h4 style="margin: 0 0 10px 0; color: #2e7d32;">💡 Hướng dẫn đọc bảng</h4>
+                        <ul style="margin: 0; padding-left: 20px; font-size: 12px; color: #555;">
+                            <li><strong>Bán tuần qua:</strong> Số lượng bán thực tế 7 ngày gần nhất</li>
+                            <li><strong>Xu hướng:</strong> % thay đổi so với tuần trước (📈 tăng, 📉 giảm, ➡️ ổn định)</li>
+                            <li><strong>Tồn kho tối ưu:</strong> Mức tồn kho an toàn để tránh hết hàng (1.5x dự báo)</li>
+                            <li><strong>Đề xuất đặt tuần tới:</strong> Số lượng nên đặt thêm để đảm bảo đủ hàng</li>
                         </ul>
                     </div>
                     
                     <div class="footer">
-                        <p>🔄 Đây là email tự động từ ML Pipeline System</p>
-                        <p>Retail Data Pipeline | Generated at {timestamp}</p>
+                        <p>🔄 Báo cáo được tạo tự động bởi hệ thống ML Pipeline HASU</p>
+                        <p>Thờ i gian tạo: {timestamp}</p>
                     </div>
                 </div>
             </div>
