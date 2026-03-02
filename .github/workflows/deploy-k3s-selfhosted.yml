@@ -28,9 +28,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Kubeconfig
+        run: |
+          # Copy kubeconfig từ system sang home nếu chưa có
+          if [ ! -f ~/.kube/config ]; then
+            mkdir -p ~/.kube
+            sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+            sudo chown $(id -u):$(id -g) ~/.kube/config
+            chmod 600 ~/.kube/config
+          fi
+          export KUBECONFIG=~/.kube/config
+          kubectl cluster-info
+
       - name: Deploy to K3s (Local)
         env:
           DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          KUBECONFIG: ~/.kube/config
         run: |
           echo "🚀 Deploying to K3s (Self-Hosted Runner)"
           
