@@ -2109,21 +2109,18 @@ class SalesForecaster:
             forecast_qty = row['forecast_7d_quantity']
             avg_daily = forecast_qty / 7
             
-            # Số lượng cần đặt: đủ cho 30 ngày (khoảng 1 tháng)
-            so_luong_can_dat = round(avg_daily * 30)
+            # Số lượng cần đặt: đủ cho 1 tuần tới (dự báo 7 ngày)
+            so_luong_can_dat = round(forecast_qty)
             
-            # Số lượng tồn kho tối ưu: reorder_point + safety_stock (khoảng 3-4 tuần)
-            reorder_point = round(avg_daily * 14)    # 2 tuần
-            safety_stock = round(avg_daily * 7 * 1.5)  # 1.5 tuần
-            ton_kho_toi_uu = reorder_point + safety_stock
+            # Số lượng tồn kho tối ưu: đủ cho 1 tuần (7 ngày)
+            ton_kho_toi_uu = round(avg_daily * 7)
             
-            # Xác định ưu tiên
-            if forecast_qty > reorder_point * 1.5:
-                uu_tien = 'Cần gấp'  # URGENT
-            elif forecast_qty > reorder_point:
-                uu_tien = 'Cần đủ'   # NEEDED
+            # Xác định ưu tiên dựa trên mức độ khan hiếm dự kiến
+            # Nếu dự báo cao (trên 150% so với trung bình) -> cần gấp
+            if forecast_qty > avg_daily * 7 * 1.5:
+                uu_tien = 'Cần gấp'  # Dự báo cao bất thường
             else:
-                uu_tien = 'Cần đủ'   # PLANNED nhưng vẫn là "cần đủ"
+                uu_tien = 'Cần đủ'   # Dự báo bình thường
             
             purchase_orders.append({
                 'stt': len(purchase_orders) + 1,
