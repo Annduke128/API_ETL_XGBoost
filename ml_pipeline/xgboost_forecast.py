@@ -2035,6 +2035,153 @@ class SalesForecaster:
             'reorder_urgency': 'High' if total_predicted > avg_daily * 14 else 'Normal'
         }
     
+    def generate_purchase_order_csv(self, forecasts: pd.DataFrame = None, 
+                                     top_n: int = 50,
+                                     output_path: str = None) -> str:
+        """
+        Tạo file CSV đơn hàng cần đặt cho tuần tới
+        
+        Chọn top N sản phẩm có dự báo cao nhất và tính toán số lượng cần đặt.
+        Format giống như dự báo Model 1 nhưng thêm thông tin đặt hàng.
+        
+        Args:
+            forecasts: DataFrame từ predict_next_week(). Nếu None sẽ chạy dự báo mới.
+            top_n: Số sản phẩm cần đặt (mặc định 50)
+            output_path: Đường dẫn file output. Nếu None sẽ dùng mặc định.
+            
+        Returns:
+            Đường dẫn file CSV đã tạo
+        """
+        logger.info("=" * 60)
+        logger.info("📦 TẠO ĐƠN HÀNG CẦN ĐẶT (Purchase Order)")
+        logger.info("=" * 60)
+        
+        # Nếu không có forecasts thì chạy dự báo mới
+        if forecasts is None or forecasts.empty:
+            logger.info("Chưa có dữ liệu dự báo, đang chạy predict_next_week...")
+            forecasts = self.predict_next_week(use_abc_filter=False)
+        
+        if forecasts.empty:
+            logger.error("❌ Không có dữ liệu dự báo để tạo đơn hàng")
+            return None
+        
+        # Tổng hợp dự báo theo sản phẩm (7 ngày)
+        product_summary = forecasts.groupby(['ma_hang', 'ten_san_pham', 'nhom_hang_cap_1', 
+                                            'nhom_hang_cap_2', 'abc_class']).agg({
+            'predicted_quantity': 'sum',
+            'predicted_quantity_raw': 'sum',
+            'chi_nhanh': lambda x: ', '.join(x.unique())  # Các chi nhánh có bán
+        }).reset_index()
+        
+        product_summary.columns = ['ma_hang', 'ten_san_pham', 'nhom_hang_cap_1', 
+                                   'nhom_hang_cap_2', 'abc_class', 'forecast_7d_quantity',
+                                   'forecast_7d_raw', 'branches']
+        
+        # Sắp xếp theo dự báo giảm dần
+        product_summary = product_summary.sort_values('forecast_7d_quantity', ascending=False)
+        
+        # Lấy top N sản phẩm
+        top_products = product_summary.head(top_n).copy()
+        
+        logger.info(f"\n📊 Đã chọn {len(top_products)} sản phẩm cần đặt hàng:")
+        logger.info(f"   - Tổng dự báo 7 ngày: {top_products['forecast_7d_quantity'].sum():,.0f} units")
+        logger.info(f"   - Trung bình/sản phẩm: {top_products['forecast_7d_quantity'].mean():.0f} units")
+        
+        # Tính toán số lượng đặt hàng cho từng sản phẩm
+        purchase_orders = []
+        
+        for idx, row in top_products.iterrows():
+            forecast_qty = row['forecast_7d_quantity']
+            avg_daily = forecast_qty / 7
+            
+            # Logic tính số lượng đặt hàng
+            suggested_order = round(avg_daily * 30)  # 1 tháng
+            reorder_point = round(avg_daily * 14)    # 2 tuần
+            safety_stock = round(avg_daily * 7 * 1.5)  # 1.5 tuần
+            
+            # Tính priority score dựa trên ABC class và forecast
+            priority_score = forecast_qty
+            if row['abc_class'] == 'A':
+                priority_score *= 2.0  # Ưu tiên cao cho A
+                priority = 'HIGH'
+            elif row['abc_class'] == 'B':
+                priority_score *= 1.5
+                priority = 'MEDIUM'
+            else:
+                priority_score *= 1.0
+                priority = 'NORMAL'
+            
+            # Xác định status
+            if forecast_qty > reorder_point * 1.5:
+                status = 'URGENT'
+            elif forecast_qty > reorder_point:
+                status = 'NEEDED'
+            else:
+                status = 'PLANNED'
+            
+            purchase_orders.append({
+                # Thông tin sản phẩm (giống Model 1)
+                'stt': len(purchase_orders) + 1,
+                'ma_hang': row['ma_hang'],
+                'ten_san_pham': row['ten_san_pham'],
+                'nhom_hang_cap_1': row['nhom_hang_cap_1'],
+                'nhom_hang_cap_2': row['nhom_hang_cap_2'],
+                'abc_class': row['abc_class'],
+                'branches': row['branches'],
+                
+                # Thông tin dự báo (giống Model 1)
+                'forecast_7d_quantity': round(forecast_qty),
+                'forecast_7d_raw': round(row['forecast_7d_raw'], 2),
+                'avg_daily_demand': round(avg_daily, 2),
+                
+                # Thông tin đặt hàng (mới)
+                'suggested_order_quantity': suggested_order,
+                'reorder_point': reorder_point,
+                'safety_stock': safety_stock,
+                'priority': priority,
+                'priority_score': round(priority_score, 0),
+                'status': status,
+                
+                # Metadata
+                'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'forecast_week': (datetime.now() + timedelta(days=1)).strftime('%Y-W%U')
+            })
+        
+        # Tạo DataFrame
+        po_df = pd.DataFrame(purchase_orders)
+        
+        # Sắp xếp lại theo priority score giảm dần
+        po_df = po_df.sort_values('priority_score', ascending=False)
+        po_df['stt'] = range(1, len(po_df) + 1)  # Cập nhật lại STT
+        
+        # Xác định output path
+        if output_path is None:
+            output_dir = '/app/output' if os.path.exists('/app/output') else os.getcwd()
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_path = os.path.join(output_dir, f'purchase_order_{timestamp}.csv')
+        
+        # Đảm bảo directory tồn tại
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Lưu file CSV
+        po_df.to_csv(output_path, index=False, encoding='utf-8-sig')
+        
+        logger.info(f"\n✅ Đã tạo file đơn hàng: {output_path}")
+        logger.info(f"   - Số dòng: {len(po_df)}")
+        logger.info(f"   - Tổng số lượng đề xuất: {po_df['suggested_order_quantity'].sum():,.0f} units")
+        logger.info(f"   - Tổng giá trị dự báo: {po_df['forecast_7d_quantity'].sum():,.0f} units")
+        
+        # Hiển thị top 10
+        logger.info("\n🔥 Top 10 sản phẩm ưu tiên đặt hàng:")
+        logger.info(f"{'STT':<5} {'Mã hàng':<12} {'Tên sản phẩm':<30} {'ABC':<5} {'Dự báo 7d':<12} {'Đặt hàng':<12} {'Ưu tiên'}")
+        logger.info("-" * 100)
+        for _, row in po_df.head(10).iterrows():
+            name_short = row['ten_san_pham'][:28] if len(str(row['ten_san_pham'])) > 28 else row['ten_san_pham']
+            logger.info(f"{row['stt']:<5} {row['ma_hang']:<12} {name_short:<30} {row['abc_class']:<5} "
+                       f"{row['forecast_7d_quantity']:>10,} {row['suggested_order_quantity']:>10,} {row['priority']}")
+        
+        return output_path
+    
     def send_error_notification(self, error_message: str, context: str = ""):
         """Gửi thông báo lỗi qua email"""
         if self.email_notifier:
