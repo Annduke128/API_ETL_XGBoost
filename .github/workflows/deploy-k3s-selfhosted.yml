@@ -19,9 +19,6 @@ on:
           - production
           - staging
 
-env:
-  KUBECONFIG: /home/runner/.kube/config
-
 jobs:
   deploy:
     runs-on: self-hosted
@@ -31,16 +28,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Kubeconfig
+      - name: Verify K3s Connection
         run: |
-          # Copy kubeconfig từ system sang home
-          mkdir -p ~/.kube
-          sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
-          sudo chown $(id -u):$(id -g) ~/.kube/config
-          chmod 600 ~/.kube/config
-          echo "KUBECONFIG=$KUBECONFIG"
-          kubectl config view
-          kubectl cluster-info
+          echo "🔍 Verifying K3s connection..."
+          k3s kubectl cluster-info
+          k3s kubectl get nodes
 
       - name: Deploy to K3s (Local)
         env:
@@ -49,11 +41,10 @@ jobs:
           echo "🚀 Deploying to K3s (Self-Hosted Runner)"
           
           # Kiểm tra quyền
-          echo "🔍 Checking permissions..."
+          echo "🔍 Current user:"
           whoami
-          groups
           
-          # Pull latest images (không cần sudo nếu user có quyền docker)
+          # Pull latest images
           echo "📥 Pulling latest images..."
           docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest
           docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-dbt:latest
@@ -61,32 +52,32 @@ jobs:
           
           # Update CronJobs
           echo "🔄 Updating CronJobs..."
-          kubectl set image cronjob/ml-training ml-training=${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest -n hasu-ml
-          kubectl set image cronjob/ml-predict ml-predict=${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest -n hasu-ml
-          kubectl set image cronjob/dbt-daily dbt=${{ secrets.DOCKERHUB_USERNAME }}/hasu-dbt:latest -n hasu-ml
+          k3s kubectl set image cronjob/ml-training ml-training=${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest -n hasu-ml
+          k3s kubectl set image cronjob/ml-predict ml-predict=${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest -n hasu-ml
+          k3s kubectl set image cronjob/dbt-daily dbt=${{ secrets.DOCKERHUB_USERNAME }}/hasu-dbt:latest -n hasu-ml
           
           # Restart Deployments
           echo "🔄 Restarting Deployments..."
-          kubectl rollout restart deployment/airflow-webserver -n hasu-ml || true
-          kubectl rollout restart deployment/airflow-scheduler -n hasu-ml || true
-          kubectl rollout restart deployment/superset -n hasu-ml || true
-          kubectl rollout restart deployment/postgres -n hasu-ml || true
-          kubectl rollout restart deployment/clickhouse -n hasu-ml || true
-          kubectl rollout restart deployment/redis -n hasu-ml || true
+          k3s kubectl rollout restart deployment/airflow-webserver -n hasu-ml || true
+          k3s kubectl rollout restart deployment/airflow-scheduler -n hasu-ml || true
+          k3s kubectl rollout restart deployment/superset -n hasu-ml || true
+          k3s kubectl rollout restart deployment/postgres -n hasu-ml || true
+          k3s kubectl rollout restart deployment/clickhouse -n hasu-ml || true
+          k3s kubectl rollout restart deployment/redis -n hasu-ml || true
           
           # Wait for rollout
           echo "⏳ Waiting for rollouts..."
-          kubectl rollout status deployment/airflow-webserver -n hasu-ml --timeout=300s || true
-          kubectl rollout status deployment/airflow-scheduler -n hasu-ml --timeout=300s || true
-          kubectl rollout status deployment/superset -n hasu-ml --timeout=300s || true
+          k3s kubectl rollout status deployment/airflow-webserver -n hasu-ml --timeout=300s || true
+          k3s kubectl rollout status deployment/airflow-scheduler -n hasu-ml --timeout=300s || true
+          k3s kubectl rollout status deployment/superset -n hasu-ml --timeout=300s || true
           
           # Verify
           echo ""
           echo "=== Deployment Status ==="
-          kubectl get deployments -n hasu-ml
+          k3s kubectl get deployments -n hasu-ml
           echo ""
           echo "=== Pod Status ==="
-          kubectl get pods -n hasu-ml
+          k3s kubectl get pods -n hasu-ml
           
           # Cleanup
           echo "🧹 Cleaning up old images..."
