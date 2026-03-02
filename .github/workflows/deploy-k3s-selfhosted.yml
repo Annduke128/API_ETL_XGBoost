@@ -34,11 +34,16 @@ jobs:
         run: |
           echo "🚀 Deploying to K3s (Self-Hosted Runner)"
           
-          # Pull latest images
+          # Kiểm tra quyền
+          echo "🔍 Checking permissions..."
+          whoami
+          groups
+          
+          # Pull latest images (không cần sudo nếu user có quyền docker)
           echo "📥 Pulling latest images..."
-          sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest
-          sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-dbt:latest
-          sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-sync-tool:latest
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-dbt:latest
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-sync-tool:latest
           
           # Update CronJobs
           echo "🔄 Updating CronJobs..."
@@ -71,7 +76,7 @@ jobs:
           
           # Cleanup
           echo "🧹 Cleaning up old images..."
-          sudo docker image prune -f --filter "until=168h" || true
+          docker image prune -f --filter "until=168h" || true
           
           echo ""
           echo "✅ Deployment completed!"
