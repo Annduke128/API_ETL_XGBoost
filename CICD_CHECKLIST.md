@@ -28,21 +28,49 @@ Tạo 3 repositories trên Docker Hub:
 
 ## ✅ 2. GITHUB SETUP
 
-### 2.1 Repository Secrets
+### 2.1 Repository Secrets (Required)
 Vào GitHub Repo → Settings → Secrets and variables → Actions → New repository secret
 
 | Secret Name | Value | Mô tả |
 |-------------|-------|-------|
 | `DOCKERHUB_USERNAME` | your-dockerhub-username | Tên Docker Hub |
 | `DOCKERHUB_TOKEN` | dckr_pat_xxxxx... | Access Token đã tạo ở trên |
-| `KUBECONFIG` | (base64 encoded) | Kubeconfig cho K3s (nếu deploy tự động) |
 
-### 2.2 Cách lấy KUBECONFIG cho K3s
+### 2.2 K3s Auto-Deploy Secrets (Chọn 1 cách)
+
+#### ✅ Cách 1: SSH vào máy Production (Khuyến nghị)
+Dùng cho: Máy K3s không expose API ra ngoài
+
+| Secret Name | Value | Mô tả |
+|-------------|-------|-------|
+| `K3S_HOST` | 192.168.1.100 hoặc your-domain.com | IP/Hostname K3s server |
+| `K3S_USER` | ubuntu hoặc root | Username SSH |
+| `SSH_PRIVATE_KEY` | `cat ~/.ssh/id_rsa` | SSH private key |
+
+**Setup SSH Key trên K3s server:**
+```bash
+# 1. Tạo key pair (nếu chưa có)
+ssh-keygen -t rsa -b 4096 -C "github-actions"
+
+# 2. Copy public key vào authorized_keys
+cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+
+# 3. Copy private key vào GitHub Secret SSH_PRIVATE_KEY
+cat ~/.ssh/id_rsa
+```
+
+#### Cách 2: Remote Kubeconfig
+Dùng cho: K3s có API expose với HTTPS
+
+| Secret Name | Value | Mô tả |
+|-------------|-------|-------|
+| `KUBECONFIG` | `cat ~/.kube/config \| base64 -w 0` | Base64 kubeconfig |
+
 ```bash
 # Trên máy K3s server
 cat ~/.kube/config | base64 -w 0
-
-# Copy output và paste vào GitHub Secret "KUBECONFIG"
+# Copy output vào GitHub Secret KUBECONFIG
 ```
 
 ---
@@ -60,10 +88,16 @@ docker/
 ### 3.2 GitHub Actions Workflows (✅ Đã có sẵn)
 ```
 .github/workflows/
-├── docker-build-push.yml    ✅ Build & push images
-├── deploy-k3s.yml           ✅ Deploy to K3s
-└── test.yml                 ✅ Test & lint code
+├── docker-build-push.yml     ✅ Build & push images
+├── deploy-k3s-ssh.yml        ✅ Auto-deploy to K3s via SSH (Production)
+├── deploy-k3s.yml            ✅ Deploy to K3s via Kubeconfig (Remote)
+└── test.yml                  ✅ Test & lint code
 ```
+
+**Workflow tự động:**
+1. `docker-build-push.yml` - Build & push khi push code lên main
+2. `deploy-k3s-ssh.yml` - Auto-deploy qua SSH khi build thành công
+3. Có thể trigger thủ công qua GitHub Actions tab
 
 ### 3.3 K8s Manifests (✅ Đã có sẵn)
 ```
@@ -98,15 +132,34 @@ Push to Docker Hub with tags:
   - sha-abc123 (commit sha)
 ```
 
-### 4.2 Deploy Pipeline (Tùy chọn)
+### 4.2 Auto-Deploy Pipeline
+
+**Option A: Deploy via SSH (Khuyến nghị cho production)**
 ```
-Build thành công
+Push code lên main
+    ↓
+Build & Push images (docker-build-push.yml)
+    ↓
+Trigger: deploy-k3s-ssh.yml
+    ↓
+SSH vào máy K3s Production
+    ↓
+Pull images & Restart deployments
+    ↓
+✅ Production updated!
+```
+
+**Option B: Deploy via Kubeconfig**
+```
+Push code lên main
+    ↓
+Build & Push images (docker-build-push.yml)
     ↓
 Trigger: deploy-k3s.yml
     ↓
-Update K3s CronJobs & Deployments
+Remote kubectl apply
     ↓
-Pull new images from Docker Hub
+✅ Cluster updated!
 ```
 
 ---
@@ -184,10 +237,29 @@ kubectl get pods -n hasu-ml
 ```
 
 ### Deploy Failed
+
+**SSH Connection Failed:**
 ```bash
-# Kiểm tra KUBECONFIG
+# Kiểm tra SSH key đúng chưa
+cat ~/.ssh/id_rsa
+
+# Kiểm tra authorized_keys trên K3s server
+cat ~/.ssh/authorized_keys
+
+# Kiểm tra SSH service trên K3s
+sudo systemctl status ssh
+```
+
+**Kubeconfig Failed:**
+```bash
+# Kiểm tra KUBECONFIG đúng chưa
+cat ~/.kube/config | base64 -w 0
+
 # Kiểm tra K3s cluster accessible
+kubectl cluster-info
+
 # Kiểm tra namespace tồn tại
+kubectl get namespace hasu-ml
 ```
 
 ---
