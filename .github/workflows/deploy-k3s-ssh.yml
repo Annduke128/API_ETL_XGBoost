@@ -28,29 +28,50 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup SSH Key
+      - name: Check Secrets
         run: |
-          mkdir -p ~/.ssh
-          echo "Setting up SSH for ${{ secrets.K3S_USER }}@${{ secrets.K3S_HOST }}"
-          
-          # Check if secrets are set
+          echo "🔍 Checking secrets..."
           if [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]; then
             echo "❌ ERROR: SSH_PRIVATE_KEY is empty!"
             exit 1
           fi
+          echo "✅ SSH_PRIVATE_KEY is set"
           
           if [ -z "${{ secrets.K3S_HOST }}" ]; then
             echo "❌ ERROR: K3S_HOST is empty!"
             exit 1
           fi
+          echo "✅ K3S_HOST is set: ${{ secrets.K3S_HOST }}"
           
+          if [ -z "${{ secrets.K3S_USER }}" ]; then
+            echo "❌ ERROR: K3S_USER is empty!"
+            exit 1
+          fi
+          echo "✅ K3S_USER is set: ${{ secrets.K3S_USER }}"
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "Setting up SSH key..."
+          
+          # Write key
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           
-          # Test if we can resolve the host
+          # Validate key format
+          echo "🔍 Validating SSH key format..."
+          head -n1 ~/.ssh/id_rsa
+          
+          # Test host connectivity
           echo "🔍 Testing connection to ${{ secrets.K3S_HOST }}..."
-          ssh-keyscan -H ${{ secrets.K3S_HOST }} >> ~/.ssh/known_hosts 2>&1 || {
+          ping -c 1 ${{ secrets.K3S_HOST }} || echo "⚠️ Ping failed, trying ssh-keyscan..."
+          
+          ssh-keyscan -v -H ${{ secrets.K3S_HOST }} >> ~/.ssh/known_hosts 2>&1 || {
             echo "❌ ERROR: Cannot reach host ${{ secrets.K3S_HOST }}"
+            echo "Possible causes:"
+            echo "  - Host is down"
+            echo "  - Firewall blocking port 22"
+            echo "  - Wrong IP/hostname"
             exit 1
           }
           echo "✅ Host added to known_hosts"
