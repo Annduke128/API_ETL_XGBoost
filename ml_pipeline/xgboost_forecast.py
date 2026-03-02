@@ -1657,6 +1657,348 @@ class SalesForecaster:
             except Exception as e:
                 logger.error(f"❌ Lỗi khi gửi email forecast: {e}")
     
+    def predict_category_trend(self, days: int = 7) -> pd.DataFrame:
+        """
+        Model 2: Dự báo xu hướng theo Category Level
+        
+        Dự báo tổng quantity của từng nhóm hàng cấp 1, sử dụng aggregate features
+        và seasonal patterns. So sánh với Model 1 để đánh giá consistency.
+        
+        Args:
+            days: Số ngày dự báo (mặc định 7)
+            
+        Returns:
+            DataFrame với dự báo category-level
+        """
+        logger.info("=" * 60)
+        logger.info("📊 MODEL 2: CATEGORY TREND FORECAST")
+        logger.info("=" * 60)
+        
+        # Load models nếu chưa có
+        if 'category_trend' not in self.models:
+            model_path = os.path.join(self.model_dir, 'category_trend_model.pkl')
+            if os.path.exists(model_path):
+                self.models['category_trend'] = joblib.load(model_path)
+                logger.info("✅ Loaded category_trend model")
+            else:
+                logger.error("❌ Model category_trend chưa được train!")
+                return pd.DataFrame()
+        
+        # Tạo future dates
+        future_dates = pd.date_range(
+            start=datetime.now().date() + timedelta(days=1),
+            periods=days,
+            freq='D'
+        )
+        
+        # Lấy danh sách categories
+        categories_query = """
+        SELECT DISTINCT category_level_1 as nhom_hang_cap_1
+        FROM retail_dw.dim_product
+        WHERE category_level_1 IS NOT NULL
+          AND lower(category_level_1) NOT LIKE '%khuyến mại%'
+          AND lower(category_level_1) NOT LIKE '%khuyen mai%'
+        ORDER BY category_level_1
+        """
+        try:
+            categories = self.ch.query(categories_query)
+            category_list = categories['nhom_hang_cap_1'].tolist()
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi lấy danh sách categories: {e}")
+            return pd.DataFrame()
+        
+        logger.info(f"📦 Categories: {len(category_list)}")
+        logger.info(f"📅 Forecast period: {future_dates[0]} to {future_dates[-1]}")
+        
+        # Lấy dynamic seasonal factors
+        check_query = """
+        SELECT count() 
+        FROM system.tables 
+        WHERE database = 'retail_dw' AND name = 'int_dynamic_seasonal_factor'
+        """
+        try:
+            seasonal_exists = self.ch.query(check_query).iloc[0, 0] > 0
+        except:
+            seasonal_exists = False
+        
+        seasonal_map = {}
+        if seasonal_exists:
+            future_months = list(set([d.month for d in future_dates]))
+            months_str = ', '.join([str(m) for m in future_months])
+            
+            seasonal_query = f"""
+            SELECT month, peak_reason, seasonal_factor, quantity_factor,
+                   CASE WHEN peak_reason IS NOT NULL THEN 1 ELSE 0 END as is_peak_day
+            FROM retail_dw.int_dynamic_seasonal_factor
+            WHERE month IN ({months_str})
+            """
+            try:
+                seasonal_df = self.ch.query(seasonal_query)
+                for _, row in seasonal_df.iterrows():
+                    seasonal_map[int(row['month'])] = {
+                        'seasonal_factor': float(row.get('seasonal_factor', 1.0)),
+                        'quantity_factor': float(row.get('quantity_factor', 1.0)),
+                        'is_peak_day': int(row.get('is_peak_day', 0)),
+                        'peak_reason': row.get('peak_reason', '')
+                    }
+                logger.info(f"✅ Loaded seasonal factors: {len(seasonal_map)} months")
+            except Exception as e:
+                logger.warning(f"⚠️ Không thể load seasonal factors: {e}")
+        
+        # Lấy dữ liệu lịch sử category-level
+        cats_str = "', '".join(category_list)
+        history_query = f"""
+        SELECT 
+            f.transaction_date as ngay,
+            p.category_level_1 as nhom_hang_cap_1,
+            SUM(f.quantity_sold) as daily_quantity,
+            SUM(f.gross_revenue) as daily_revenue,
+            toDayOfWeek(f.transaction_date) as day_of_week,
+            toDayOfMonth(f.transaction_date) as day_of_month,
+            toMonth(f.transaction_date) as month,
+            toWeek(f.transaction_date) as week_of_year,
+            toDayOfWeek(f.transaction_date) IN (6, 7) as is_weekend,
+            multiIf(
+                (toMonth(f.transaction_date) = 1 AND toDayOfMonth(f.transaction_date) <= 5), true,
+                (toMonth(f.transaction_date) = 4 AND toDayOfMonth(f.transaction_date) = 30), true,
+                (toMonth(f.transaction_date) = 5 AND toDayOfMonth(f.transaction_date) = 1), true,
+                (toMonth(f.transaction_date) = 9 AND toDayOfMonth(f.transaction_date) = 2), true,
+                false
+            ) as is_holiday
+        FROM retail_dw.fct_regular_sales f
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
+        WHERE p.category_level_1 IN ('{cats_str}')
+          AND f.transaction_date >= today() - 60
+        GROUP BY f.transaction_date, p.category_level_1
+        ORDER BY p.category_level_1, f.transaction_date
+        """
+        
+        try:
+            history_df = self.ch.query(history_query)
+            history_df['ngay'] = pd.to_datetime(history_df['ngay'])
+            logger.info(f"✅ Loaded {len(history_df)} historical category records")
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi query category history: {e}")
+            return pd.DataFrame()
+        
+        # Dự báo cho từng category
+        forecasts = []
+        model_features = list(self.models['category_trend'].feature_names_in_)
+        
+        for category in category_list:
+            cat_history = history_df[history_df['nhom_hang_cap_1'] == category].sort_values('ngay')
+            
+            if len(cat_history) < 7:
+                logger.warning(f"⚠️ Category {category}: insufficient data ({len(cat_history)} days)")
+                continue
+            
+            for future_date in future_dates:
+                try:
+                    # Tạo future row
+                    month = future_date.month
+                    sf = seasonal_map.get(month, {'seasonal_factor': 1.0, 'quantity_factor': 1.0, 'is_peak_day': 0})
+                    
+                    future_row = pd.DataFrame({
+                        'ngay': [future_date],
+                        'nhom_hang_cap_1': [category],
+                        'daily_quantity': [0],
+                        'daily_revenue': [0],
+                        'is_peak_day': [sf['is_peak_day']],
+                        'seasonal_factor': [sf['seasonal_factor']],
+                        'quantity_factor': [sf['quantity_factor']]
+                    })
+                    
+                    # Combine và tạo features
+                    combined = pd.concat([cat_history, future_row], ignore_index=True)
+                    combined['ngay'] = pd.to_datetime(combined['ngay'])
+                    
+                    # Tạo time-based features
+                    combined['day_of_week'] = combined['ngay'].dt.dayofweek + 1
+                    combined['day_of_month'] = combined['ngay'].dt.day
+                    combined['month'] = combined['ngay'].dt.month
+                    combined['week_of_year'] = combined['ngay'].dt.isocalendar().week.astype(int)
+                    combined['is_weekend'] = (combined['day_of_week'] >= 6).astype(int)
+                    combined['is_month_start'] = (combined['day_of_month'] == 1).astype(int)
+                    combined['is_month_end'] = (combined['day_of_month'] == combined['ngay'].dt.days_in_month).astype(int)
+                    
+                    # Holiday detection
+                    combined['is_holiday'] = (
+                        ((combined['month'] == 1) & (combined['day_of_month'] <= 5)) |
+                        ((combined['month'] == 4) & (combined['day_of_month'] == 30)) |
+                        ((combined['month'] == 5) & (combined['day_of_month'] == 1)) |
+                        ((combined['month'] == 9) & (combined['day_of_month'] == 2))
+                    ).astype(int)
+                    
+                    # Lag features
+                    for lag in [1, 7, 14]:
+                        combined[f'lag_{lag}_quantity'] = combined['daily_quantity'].shift(lag)
+                        combined[f'lag_{lag}_revenue'] = combined['daily_revenue'].shift(lag)
+                    
+                    # Rolling statistics
+                    for window in [7, 14]:
+                        combined[f'rolling_mean_{window}_quantity'] = combined['daily_quantity'] \
+                            .rolling(window, min_periods=1).mean()
+                    
+                    # Growth rate
+                    combined['quantity_growth'] = combined['daily_quantity'].pct_change()
+                    combined['quantity_growth'] = combined['quantity_growth'].replace([np.inf, -np.inf], 0).fillna(0)
+                    
+                    # Encoding
+                    combined['category1_encoded'] = pd.Categorical(combined['nhom_hang_cap_1']).codes
+                    
+                    # Dummy values cho compatibility
+                    combined['chi_nhanh'] = 'ALL_BRANCHES'
+                    combined['ma_hang'] = 'ALL_PRODUCTS'
+                    combined['nhom_hang_cap_2'] = 'ALL_CAT2'
+                    combined['branch_encoded'] = 0
+                    combined['category2_encoded'] = 0
+                    combined['category_daily_quantity'] = combined['daily_quantity']
+                    
+                    # Clean up
+                    numeric_cols = combined.select_dtypes(include=[np.number]).columns
+                    for col in numeric_cols:
+                        combined[col] = combined[col].replace([np.inf, -np.inf], 0).fillna(0)
+                    
+                    # Fill missing features
+                    for col in model_features:
+                        if col not in combined.columns:
+                            combined[col] = 0
+                    
+                    # Lấy row dự báo
+                    pred_row = combined[combined['ngay'] == future_date]
+                    if len(pred_row) == 0:
+                        continue
+                    
+                    # Predict
+                    X_pred = pred_row[model_features].fillna(0)
+                    quantity_pred = max(0, self.models['category_trend'].predict(X_pred)[0])
+                    
+                    forecasts.append({
+                        'forecast_date': future_date.date(),
+                        'nhom_hang_cap_1': category,
+                        'predicted_quantity': round(quantity_pred),
+                        'predicted_quantity_raw': float(quantity_pred),
+                        'seasonal_factor': sf['seasonal_factor'],
+                        'is_peak_day': sf['is_peak_day'],
+                        'peak_reason': sf.get('peak_reason', ''),
+                        'created_at': datetime.now()
+                    })
+                    
+                except Exception as e:
+                    logger.debug(f"Lỗi dự báo category {category} ngày {future_date}: {e}")
+        
+        result_df = pd.DataFrame(forecasts)
+        logger.info(f"✅ Model 2: {len(result_df)} category-level forecasts generated")
+        
+        # Tổng hợp theo category
+        if not result_df.empty:
+            summary = result_df.groupby('nhom_hang_cap_1')['predicted_quantity'].sum().sort_values(ascending=False)
+            logger.info("\n📊 Category Forecast Summary (7 days total):")
+            for cat, qty in summary.head(10).items():
+                logger.info(f"   {cat}: {qty:,.0f} units")
+        
+        return result_df
+    
+    def compare_model_predictions(self, product_forecasts: pd.DataFrame, 
+                                   category_forecasts: pd.DataFrame) -> Dict:
+        """
+        So sánh dự báo giữa Model 1 (Product-level) và Model 2 (Category-level)
+        
+        Tính consistency score và phát hiện sự khác biệt đáng chú ý.
+        
+        Args:
+            product_forecasts: Kết quả từ predict_next_week() [Model 1]
+            category_forecasts: Kết quả từ predict_category_trend() [Model 2]
+            
+        Returns:
+            Dict chứa comparison metrics và analysis
+        """
+        logger.info("=" * 60)
+        logger.info("📊 MODEL COMPARISON: Product vs Category Level")
+        logger.info("=" * 60)
+        
+        if product_forecasts.empty or category_forecasts.empty:
+            logger.warning("⚠️ Thiếu dữ liệu dự báo để so sánh")
+            return {'error': 'Insufficient forecast data'}
+        
+        # Aggregate Model 1 lên category level để so sánh
+        model1_by_category = product_forecasts.groupby('nhom_hang_cap_1').agg({
+            'predicted_quantity': 'sum',
+            'ma_hang': 'nunique'
+        }).rename(columns={'ma_hang': 'num_products'})
+        
+        # Model 2 đã ở category level
+        model2_by_category = category_forecasts.groupby('nhom_hang_cap_1')['predicted_quantity'].sum()
+        
+        # Tính tổng tất cả categories
+        total_model1 = model1_by_category['predicted_quantity'].sum()
+        total_model2 = model2_by_category.sum()
+        
+        logger.info(f"\n📈 TỔNG DỰ BÁO (7 ngày):")
+        logger.info(f"   Model 1 (Product-level):  {total_model1:,.0f} units")
+        logger.info(f"   Model 2 (Category-level): {total_model2:,.0f} units")
+        
+        # Tính overall deviation
+        if total_model1 > 0:
+            overall_deviation = abs(total_model2 - total_model1) / total_model1 * 100
+            logger.info(f"   Overall Deviation: {overall_deviation:.1f}%")
+        
+        # So sánh từng category
+        comparison = []
+        all_categories = set(model1_by_category.index) | set(model2_by_category.index)
+        
+        logger.info(f"\n📊 CHI TIẾT THEO CATEGORY:")
+        logger.info(f"{'Category':<30} {'Model 1':<12} {'Model 2':<12} {'Diff %':<10} {'Status'}")
+        logger.info("-" * 80)
+        
+        for cat in sorted(all_categories):
+            m1_qty = model1_by_category.loc[cat, 'predicted_quantity'] if cat in model1_by_category.index else 0
+            m2_qty = model2_by_category.loc[cat] if cat in model2_by_category.index else 0
+            num_products = model1_by_category.loc[cat, 'num_products'] if cat in model1_by_category.index else 0
+            
+            if m1_qty > 0:
+                diff_pct = (m2_qty - m1_qty) / m1_qty * 100
+            else:
+                diff_pct = 0 if m2_qty == 0 else float('inf')
+            
+            # Đánh giá consistency
+            if abs(diff_pct) <= 10:
+                status = "✅ Consistent"
+            elif abs(diff_pct) <= 25:
+                status = "⚠️ Warning"
+            else:
+                status = "🔴 Significant Diff"
+            
+            comparison.append({
+                'category': cat,
+                'model1_quantity': m1_qty,
+                'model2_quantity': m2_qty,
+                'difference_pct': diff_pct,
+                'num_products': num_products,
+                'status': status
+            })
+            
+            logger.info(f"{cat:<30} {m1_qty:>11,.0f} {m2_qty:>11,.0f} {diff_pct:>+9.1f}% {status}")
+        
+        # Tính consistency score
+        consistent_cats = sum(1 for c in comparison if "Consistent" in c['status'])
+        total_cats = len(comparison)
+        consistency_score = consistent_cats / total_cats * 100 if total_cats > 0 else 0
+        
+        logger.info(f"\n📊 CONSISTENCY SCORE: {consistency_score:.1f}%")
+        logger.info(f"   Consistent categories: {consistent_cats}/{total_cats}")
+        
+        return {
+            'total_model1': total_model1,
+            'total_model2': total_model2,
+            'overall_deviation_pct': overall_deviation if total_model1 > 0 else None,
+            'consistency_score': consistency_score,
+            'category_comparison': comparison,
+            'recommendation': 'High consistency' if consistency_score >= 80 else 
+                             'Moderate consistency - review significant differences' if consistency_score >= 60 else
+                             'Low consistency - investigate data quality'
+        }
+    
     def get_inventory_recommendations(self, product_code: str) -> Dict:
         """Đưa ra khuyến nghị tồn kho"""
         # Lấy dự báo cho sản phẩm
@@ -1787,49 +2129,59 @@ class SalesForecaster:
         # PHẦN 2: XU HƯỚNG CATEGORY (Model 2)
         # ========================================
         logger.info("\n" + "-" * 50)
-        logger.info("📊 PHẦN 2: XU HƯỚNG THEO CATEGORY (Model 2 - Seasonal/Low Confidence)")
+        logger.info("📊 PHẦN 2: XU HƯỚNG THEO CATEGORY (Model 2 - Category Trend Forecast)")
         logger.info("-" * 50)
-        logger.info("⚠️  Lưu ý: Model này có độ tin cậy thấp do thiếu dữ liệu mùa vụ")
         
+        category_forecasts = pd.DataFrame()
         try:
-            # Phân tích từ dữ liệu forecasts (dự báo tương lai)
-            future_by_category = forecasts.groupby('nhom_hang_cap_1').agg({
-                'predicted_quantity': 'sum'
-            }).sort_values('predicted_quantity', ascending=False)
+            # Dự báo bằng Model 2 (Category-level)
+            category_forecasts = self.predict_category_trend(days=days)
             
-            logger.info("\n📈 Dự báo theo Category (7 ngày tới):")
-            for cat, row in future_by_category.head(10).iterrows():
-                qty = row['predicted_quantity']
-                logger.info(f"   • {cat}: {qty:5.0f} units")
-            
-            # Phân tích historical để so sánh
-            df = self.load_historical_data(days=0)  # Load toàn bộ dữ liệu có sẵn
-            if len(df) > 0:
-                hist_by_cat = df.groupby('nhom_hang_cap_1')['daily_quantity'].sum().sort_values(ascending=False)
-                logger.info("\n📊 So sánh với lịch sử (46 ngày qua):")
-                for cat in future_by_category.head(5).index:
-                    hist_qty = hist_by_cat.get(cat, 0)
-                    pred_qty = future_by_category.loc[cat, 'predicted_quantity']
-                    hist_daily = hist_qty / 46 if hist_qty > 0 else 0
-                    pred_daily = pred_qty / 7
-                    logger.info(f"   • {cat}:")
-                    logger.info(f"      - Historical: {hist_qty:,.0f} units ({hist_daily:.1f}/day)")
-                    logger.info(f"      - Predicted:  {pred_qty:,.0f} units ({pred_daily:.1f}/day)")
+            if not category_forecasts.empty:
+                # Tổng hợp theo category
+                model2_by_category = category_forecasts.groupby('nhom_hang_cap_1').agg({
+                    'predicted_quantity': 'sum',
+                    'seasonal_factor': 'mean',
+                    'is_peak_day': 'max'
+                }).sort_values('predicted_quantity', ascending=False)
+                
+                logger.info("\n📈 Model 2 - Dự báo theo Category (7 ngày tới):")
+                for cat, row in model2_by_category.head(10).iterrows():
+                    qty = row['predicted_quantity']
+                    sf = row['seasonal_factor']
+                    logger.info(f"   • {cat}: {qty:5.0f} units (seasonal: {sf:.2f})")
                 
                 report['sections']['category_trend'] = {
-                    'future_by_category': future_by_category.reset_index().to_dict('records'),
-                    'historical_by_category': hist_by_cat.reset_index().to_dict('records'),
-                    'confidence': 'LOW - Chỉ có 46 ngày dữ liệu, cần >= 1 năm để seasonal forecast chính xác'
+                    'model2_by_category': model2_by_category.reset_index().to_dict('records'),
+                    'total_categories': category_forecasts['nhom_hang_cap_1'].nunique(),
+                    'total_forecast_records': len(category_forecasts),
+                    'confidence': 'MEDIUM - Using dynamic seasonal factors'
                 }
             else:
-                report['sections']['category_trend'] = {
-                    'future_by_category': future_by_category.reset_index().to_dict('records'),
-                    'confidence': 'LOW'
-                }
+                logger.warning("⚠️ Model 2 không tạo được dự báo")
+                report['sections']['category_trend'] = {'error': 'No category forecast generated'}
                 
         except Exception as e:
-            logger.error(f"❌ Lỗi khi phân tích category trend: {e}")
+            logger.error(f"❌ Lỗi khi chạy Model 2: {e}")
             report['sections']['category_trend'] = {'error': str(e)}
+        
+        # ========================================
+        # PHẦN 3: SO SÁNH MODEL 1 vs MODEL 2
+        # ========================================
+        logger.info("\n" + "-" * 50)
+        logger.info("📊 PHẦN 3: SO SÁNH MODEL 1 VS MODEL 2")
+        logger.info("-" * 50)
+        
+        try:
+            if not forecasts.empty and not category_forecasts.empty:
+                comparison = self.compare_model_predictions(forecasts, category_forecasts)
+                report['sections']['model_comparison'] = comparison
+            else:
+                logger.warning("⚠️ Thiếu dữ liệu để so sánh models")
+                report['sections']['model_comparison'] = {'error': 'Insufficient data'}
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi so sánh models: {e}")
+            report['sections']['model_comparison'] = {'error': str(e)}
         
         # ========================================
         # KHUYẾN NGHỊ TỒN KHO
