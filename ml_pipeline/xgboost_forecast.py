@@ -81,33 +81,42 @@ class SalesForecaster:
         self.feature_cols = []  # Sẽ được cập nhật động sau khi create_features
     
     def load_historical_data(self, days: int = 0) -> pd.DataFrame:
-        """Load dữ liệu lịch sử từ ClickHouse (fct_regular_sales) - Chỉ dữ liệu baseline, không khuyến mại
+        """Load dữ liệu lịch sử từ ClickHouse (fct_regular_sales + JOIN seasonal factor)
+        
+        Cách 2B: Query từ fct_regular_sales (doanh số không khuyến mại) và JOIN với 
+        int_dynamic_seasonal_factor để lấy seasonal factors.
         
         Args:
             days: Số ngày dữ liệu để load. Nếu 0, load toàn bộ dữ liệu.
         """
         
-        # Kiểm tra bảng fct_regular_sales có tồn tại không
+        # Kiểm tra các bảng cần thiết
         check_query = """
-        SELECT count() 
+        SELECT 
+            sum(CASE WHEN name = 'fct_regular_sales' THEN 1 ELSE 0 END) as has_regular_sales,
+            sum(CASE WHEN name = 'int_dynamic_seasonal_factor' THEN 1 ELSE 0 END) as has_seasonal
         FROM system.tables 
-        WHERE database = 'retail_dw' AND name = 'fct_regular_sales'
+        WHERE database = 'retail_dw' AND name IN ('fct_regular_sales', 'int_dynamic_seasonal_factor')
         """
         try:
-            table_exists = self.ch.query(check_query).iloc[0, 0] > 0
+            check_result = self.ch.query(check_query)
+            has_regular = check_result.iloc[0, 0] > 0
+            has_seasonal = check_result.iloc[0, 1] > 0
         except:
-            table_exists = False
+            has_regular = False
+            has_seasonal = False
         
-        if not table_exists:
-            logger.warning("⚠️ Bảng fct_regular_sales chưa tồn tại. Cần chạy DBT models trước.")
-            # Fallback về fct_daily_sales nếu chưa có regular_sales
-            logger.info("📌 Fallback: Sử dụng fct_daily_sales")
-            return self._load_from_daily_sales(days)
+        if not has_regular:
+            logger.error("❌ Bảng fct_regular_sales chưa tồn tại. Cần chạy DBT models trước.")
+            return pd.DataFrame()
         
-        # Query từ bảng fct_regular_sales (chỉ dữ liệu không khuyến mại)
-        # JOIN với dim_product để lấy category info
+        if not has_seasonal:
+            logger.warning("⚠️ Bảng int_dynamic_seasonal_factor chưa tồn tại. Chạy fallback không có seasonal.")
+            return self._load_from_regular_sales_no_seasonal(days)
+        
+        # Query từ fct_regular_sales + JOIN int_dynamic_seasonal_factor (Cách 2B)
         # Nếu days=0, load toàn bộ dữ liệu
-        date_filter = f"WHERE f.transaction_date >= today() - {days}" if days > 0 else ""
+        date_filter = f"AND f.transaction_date >= today() - {days}" if days > 0 else ""
         
         query = f"""
         SELECT
@@ -132,7 +141,13 @@ class SalesForecaster:
                 (toMonth(f.transaction_date) = 9 AND toDayOfMonth(f.transaction_date) = 2), true,
                 false
             ) as is_holiday,
-            -- Metrics
+            -- DYNAMIC SEASONAL FACTORS (từ int_dynamic_seasonal_factor)
+            COALESCE(s.is_peak_day, 0) as is_peak_day,
+            COALESCE(s.seasonal_factor, 1.0) as seasonal_factor,
+            COALESCE(s.revenue_factor, 1.0) as revenue_factor,
+            COALESCE(s.quantity_factor, 1.0) as quantity_factor,
+            s.peak_reason,
+            -- Metrics (từ fct_regular_sales - không khuyến mại)
             f.gross_revenue as daily_revenue,
             f.quantity_sold as daily_quantity,
             f.gross_profit as daily_profit,
@@ -142,7 +157,10 @@ class SalesForecaster:
             p.abc_class
         FROM retail_dw.fct_regular_sales f
         LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
-        {date_filter}
+        LEFT JOIN retail_dw.int_dynamic_seasonal_factor s 
+            ON toMonth(f.transaction_date) = s.month
+        WHERE 1=1
+          {date_filter}
         ORDER BY f.transaction_date
         """
         
@@ -155,7 +173,15 @@ class SalesForecaster:
             df['thuong_hieu'] = df['thuong_hieu'].fillna('Unknown')
             df['abc_class'] = df['abc_class'].fillna('C')
             
-            logger.info(f"✅ Đã load {len(df):,} records từ fct_regular_sales (baseline only)")
+            # Log thông tin về seasonal factors nếu có
+            if 'seasonal_factor' in df.columns:
+                avg_sf = df['seasonal_factor'].mean()
+                peak_days = df['is_peak_day'].sum()
+                logger.info(f"✅ Đã load {len(df):,} records từ fct_regular_sales + dynamic seasonal")
+                logger.info(f"   🎄 Avg seasonal factor: {avg_sf:.2f}, Peak days: {peak_days}")
+            else:
+                logger.info(f"✅ Đã load {len(df):,} records từ fct_regular_sales (no seasonal)")
+            
             logger.info(f"   📊 Date range: {df['ngay'].min()} to {df['ngay'].max()}")
             logger.info(f"   📊 Products: {df['ma_hang'].nunique()}, Branches: {df['chi_nhanh'].nunique()}")
             return df
@@ -163,6 +189,68 @@ class SalesForecaster:
         except Exception as e:
             logger.error(f"❌ Lỗi khi query fct_regular_sales: {e}")
             return self._load_from_daily_sales(days)
+    
+    def _load_from_regular_sales_no_seasonal(self, days: int = 0) -> pd.DataFrame:
+        """Fallback: Load từ fct_regular_sales không có seasonal factors
+        
+        Args:
+            days: Số ngày dữ liệu để load. Nếu 0, load toàn bộ dữ liệu.
+        """
+        date_filter = f"WHERE f.transaction_date >= today() - {days}" if days > 0 else ""
+        
+        query = f"""
+        SELECT
+            f.transaction_date as ngay,
+            f.branch_code as chi_nhanh,
+            f.product_code as ma_hang,
+            p.category_level_1 as nhom_hang_cap_1,
+            p.category_level_2 as nhom_hang_cap_2,
+            toDayOfWeek(f.transaction_date) as day_of_week,
+            toDayOfMonth(f.transaction_date) as day_of_month,
+            toMonth(f.transaction_date) as month,
+            toWeek(f.transaction_date) as week_of_year,
+            toDayOfWeek(f.transaction_date) IN (6, 7) as is_weekend,
+            toDayOfMonth(f.transaction_date) = 1 as is_month_start,
+            toDayOfMonth(f.transaction_date) = toDayOfMonth(toLastDayOfMonth(f.transaction_date)) as is_month_end,
+            multiIf(
+                (toMonth(f.transaction_date) = 1 AND toDayOfMonth(f.transaction_date) <= 5), true,
+                (toMonth(f.transaction_date) = 4 AND toDayOfMonth(f.transaction_date) = 30), true,
+                (toMonth(f.transaction_date) = 5 AND toDayOfMonth(f.transaction_date) = 1), true,
+                (toMonth(f.transaction_date) = 9 AND toDayOfMonth(f.transaction_date) = 2), true,
+                false
+            ) as is_holiday,
+            f.gross_revenue as daily_revenue,
+            f.quantity_sold as daily_quantity,
+            f.gross_profit as daily_profit,
+            f.transaction_count,
+            p.brand as thuong_hieu,
+            p.abc_class,
+            -- Default seasonal factors (no seasonal table)
+            0 as is_peak_day,
+            1.0 as seasonal_factor,
+            1.0 as revenue_factor,
+            1.0 as quantity_factor,
+            '' as peak_reason
+        FROM retail_dw.fct_regular_sales f
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
+        {date_filter}
+        ORDER BY f.transaction_date
+        """
+        
+        try:
+            df = self.ch.query(query)
+            df['ngay'] = pd.to_datetime(df['ngay'])
+            df['nhom_hang_cap_1'] = df['nhom_hang_cap_1'].fillna('Unknown')
+            df['nhom_hang_cap_2'] = df['nhom_hang_cap_2'].fillna('Unknown')
+            df['thuong_hieu'] = df['thuong_hieu'].fillna('Unknown')
+            df['abc_class'] = df['abc_class'].fillna('C')
+            
+            logger.info(f"✅ Đã load {len(df):,} records từ fct_regular_sales (no seasonal - fallback)")
+            return df
+            
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi query fct_regular_sales: {e}")
+            return pd.DataFrame()
     
     def _load_from_daily_sales(self, days: int = 0) -> pd.DataFrame:
         """Fallback: Load từ fct_daily_sales nếu fct_regular_sales chưa có
@@ -249,6 +337,14 @@ class SalesForecaster:
                 'daily_revenue', 'daily_quantity', 'daily_profit', 'transaction_count'
             ])
     
+            return pd.DataFrame(columns=[
+                'ngay', 'chi_nhanh', 'ma_hang', 'nhom_hang_cap_1', 'nhom_hang_cap_2',
+                'day_of_week', 'day_of_month', 'month', 'week_of_year', 'is_weekend',
+                'is_month_start', 'is_month_end', 'is_holiday',
+                'daily_revenue', 'daily_quantity', 'daily_profit', 'transaction_count',
+                'is_peak_day', 'seasonal_factor', 'revenue_factor', 'quantity_factor', 'peak_reason'
+            ])
+    
     def create_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Tạo features cho model.
@@ -257,6 +353,7 @@ class SalesForecaster:
         được tạo tự động từ cột 'ngay' để đảm bảo consistency giữa train và predict.
         Function này tạo:
         - Time-based features (từ ngay)
+        - Dynamic seasonal factors (from ClickHouse/DBT)
         - Lag features
         - Rolling statistics  
         - Growth rate
@@ -276,13 +373,22 @@ class SalesForecaster:
         df['is_month_start'] = (df['day_of_month'] == 1).astype(int)
         df['is_month_end'] = (df['day_of_month'] == df['ngay'].dt.days_in_month).astype(int)
         
-        # Holiday detection đơn giản
-        df['is_holiday'] = (
-            ((df['month'] == 1) & (df['day_of_month'] <= 5)) |  # Tết
-            ((df['month'] == 4) & (df['day_of_month'] == 30)) |  # 30/4
-            ((df['month'] == 5) & (df['day_of_month'] == 1)) |   # 1/5
-            ((df['month'] == 9) & (df['day_of_month'] == 2))     # 2/9
-        ).astype(int)
+        # Holiday detection đơn giản (backup nếu không có từ ClickHouse)
+        if 'is_holiday' not in df.columns:
+            df['is_holiday'] = (
+                ((df['month'] == 1) & (df['day_of_month'] <= 5)) |  # Tết
+                ((df['month'] == 4) & (df['day_of_month'] == 30)) |  # 30/4
+                ((df['month'] == 5) & (df['day_of_month'] == 1)) |   # 1/5
+                ((df['month'] == 9) & (df['day_of_month'] == 2))     # 2/9
+            ).astype(int)
+        
+        # Log thông tin về seasonal factors
+        if 'seasonal_factor' in df.columns:
+            avg_factor = df['seasonal_factor'].mean()
+            peak_days = df['is_peak_day'].sum() if 'is_peak_day' in df.columns else 0
+            logger.info(f"🎄 Using DYNAMIC seasonal factors (avg: {avg_factor:.2f}, peak days: {peak_days})")
+        else:
+            logger.warning("⚠️ No seasonal_factor found - using static seasonality only")
         
         # Lag features - điều chỉnh dựa trên số ngày dữ liệu có sẵn
         df = df.sort_values(['chi_nhanh', 'ma_hang', 'ngay'])
@@ -362,7 +468,7 @@ class SalesForecaster:
         
         # Tự động xác định feature columns (bỏ qua các cột metadata và target)
         exclude_cols = {'ngay', 'chi_nhanh', 'ma_hang', 'nhom_hang_cap_1', 'nhom_hang_cap_2', 
-                       'thuong_hieu', 'brand', 'abc_class', 'ten_san_pham',
+                       'thuong_hieu', 'brand', 'abc_class', 'ten_san_pham', 'peak_reason',
                        'daily_quantity', 'daily_revenue', 'daily_profit', 'transaction_count',
                        target_col}
         
@@ -380,6 +486,11 @@ class SalesForecaster:
             )
         
         logger.info(f"📊 Sử dụng {len(available_features)} features: {available_features[:5]}...")
+        
+        # Log seasonal factors nếu có
+        seasonal_features = [f for f in available_features if any(x in f for x in ['seasonal', 'factor', 'peak'])]
+        if seasonal_features:
+            logger.info(f"🎄 Seasonal features included: {seasonal_features}")
         
         # Lưu feature columns để dùng sau này (predict, etc.)
         self.feature_cols = available_features
@@ -944,8 +1055,8 @@ class SalesForecaster:
         logger.info("   Độ tin cậy: LOW - Chỉ dùng cho xu hướng dài hạn")
         logger.info("-" * 40)
         
-        # Aggregate lên category level
-        category_df = df_features.groupby(['ngay', 'nhom_hang_cap_1']).agg({
+        # Aggregate lên category level (bao gồm cả seasonal factors)
+        agg_dict = {
             'daily_quantity': 'sum',
             'daily_revenue': 'sum',
             'day_of_week': 'first',
@@ -956,7 +1067,16 @@ class SalesForecaster:
             'is_month_start': 'first',
             'is_month_end': 'first',
             'is_holiday': 'first'
-        }).reset_index()
+        }
+        
+        # Thêm seasonal factors nếu có
+        if 'seasonal_factor' in df_features.columns:
+            agg_dict['seasonal_factor'] = 'mean'  # Trung bình seasonal factor
+            agg_dict['is_peak_day'] = 'max'  # Nếu có 1 ngày peak thì cả nhóm là peak
+            agg_dict['revenue_factor'] = 'mean'
+            agg_dict['quantity_factor'] = 'mean'
+        
+        category_df = df_features.groupby(['ngay', 'nhom_hang_cap_1']).agg(agg_dict).reset_index()
         
         category_df = category_df.sort_values(['nhom_hang_cap_1', 'ngay'])
         
@@ -1204,34 +1324,127 @@ class SalesForecaster:
         
         logger.info(f"🔮 Dự báo cho {len(product_list)} sản phẩm x {len(future_dates)} ngày = {len(product_list) * len(future_dates)} dự báo")
         
-        # BƯỚC 2: Batch query - Lấy toàn bộ dữ liệu lịch sử cho tất cả sản phẩm CÙNG LÚC
-        # Thay vì query từng sản phẩm (N+1 problem), ta query 1 lần cho tất cả
-        logger.info("📥 Đang tải dữ liệu lịch sử (batch query)...")
+        # BƯỚC 2a: Lấy DYNAMIC SEASONAL FACTORS cho ngày tương lai
+        logger.info("📥 Đang tải dynamic seasonal factors cho ngày tương lai...")
+        future_dates_str = "', '".join([d.strftime('%Y-%m-%d') for d in future_dates])
+        
+        # BƯỚC 2a: Kiểm tra và lấy DYNAMIC SEASONAL FACTORS cho ngày tương lai (Cách 2B)
+        logger.info("📥 Đang tải dynamic seasonal factors cho ngày tương lai...")
+        
+        # Kiểm tra xem bảng int_dynamic_seasonal_factor có tồn tại không
+        check_query = """
+        SELECT count() 
+        FROM system.tables 
+        WHERE database = 'retail_dw' AND name = 'int_dynamic_seasonal_factor'
+        """
+        try:
+            seasonal_table_exists = self.ch.query(check_query).iloc[0, 0] > 0
+        except:
+            seasonal_table_exists = False
+        
+        if seasonal_table_exists:
+            # Query từ int_dynamic_seasonal_factor - lấy seasonal factors cho future months
+            future_months = list(set([d.month for d in future_dates]))
+            months_str = ', '.join([str(m) for m in future_months])
+            
+            seasonal_query = f"""
+            SELECT DISTINCT
+                s.month,
+                s.peak_reason,
+                s.seasonal_factor,
+                s.revenue_factor,
+                s.quantity_factor,
+                CASE WHEN s.peak_reason IS NOT NULL THEN 1 ELSE 0 END as is_peak_day
+            FROM retail_dw.int_dynamic_seasonal_factor s
+            WHERE s.month IN ({months_str})
+            """
+            try:
+                seasonal_df = self.ch.query(seasonal_query)
+                # Tạo mapping từ month -> seasonal factors
+                seasonal_map = {}
+                for _, row in seasonal_df.iterrows():
+                    month = int(row['month'])
+                    seasonal_map[month] = {
+                        'peak_reason': row.get('peak_reason', ''),
+                        'seasonal_factor': float(row.get('seasonal_factor', 1.0)),
+                        'revenue_factor': float(row.get('revenue_factor', 1.0)),
+                        'quantity_factor': float(row.get('quantity_factor', 1.0)),
+                        'is_peak_day': int(row.get('is_peak_day', 0))
+                    }
+                logger.info(f"✅ Loaded dynamic seasonal factors: {len(seasonal_map)} months")
+                for m, data in seasonal_map.items():
+                    logger.info(f"   📅 Month {m}: {data['peak_reason'] or 'Normal'} (factor: {data['seasonal_factor']})")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load dynamic seasonal factors: {e}")
+                seasonal_map = {}
+        else:
+            logger.warning("⚠️ Bảng int_dynamic_seasonal_factor chưa tồn tại")
+            seasonal_map = {}
+        
+        # BƯỚC 2b: Batch query - Lấy toàn bộ dữ liệu lịch sử từ fct_regular_sales (Cách 2B)
+        logger.info("📥 Đang tải dữ liệu lịch sử từ fct_regular_sales + JOIN seasonal...")
         
         # Tạo chuỗi product codes cho SQL IN clause
         product_codes_str = "', '".join(product_list)
         
-        # Sử dụng fct_regular_sales cho dự báo baseline (không khuyến mại)
-        history_query = f"""
-        SELECT 
-            f.transaction_date as ngay,
-            f.branch_code as chi_nhanh,
-            f.product_code as ma_hang,
-            p.product_name as ten_san_pham,
-            p.category_level_1 as nhom_hang_cap_1,
-            p.category_level_2 as nhom_hang_cap_2,
-            f.gross_revenue as daily_revenue,
-            f.quantity_sold as daily_quantity,
-            f.gross_profit as daily_profit,
-            f.transaction_count,
-            p.brand as thuong_hieu,
-            p.abc_class
-        FROM retail_dw.fct_regular_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
-        WHERE f.product_code IN ('{product_codes_str}')
-          AND f.transaction_date >= today() - 60
-        ORDER BY f.branch_code, f.product_code, f.transaction_date
-        """
+        # Sử dụng Cách 2B: fct_regular_sales + LEFT JOIN int_dynamic_seasonal_factor
+        if seasonal_table_exists:
+            history_query = f"""
+            SELECT 
+                f.transaction_date as ngay,
+                f.branch_code as chi_nhanh,
+                f.product_code as ma_hang,
+                p.product_name as ten_san_pham,
+                p.category_level_1 as nhom_hang_cap_1,
+                p.category_level_2 as nhom_hang_cap_2,
+                -- Doanh số từ fct_regular_sales (không khuyến mại)
+                f.gross_revenue as daily_revenue,
+                f.quantity_sold as daily_quantity,
+                f.gross_profit as daily_profit,
+                f.transaction_count,
+                p.brand as thuong_hieu,
+                p.abc_class,
+                -- DYNAMIC SEASONAL FACTORS (từ int_dynamic_seasonal_factor)
+                COALESCE(s.is_peak_day, 0) as is_peak_day,
+                COALESCE(s.seasonal_factor, 1.0) as seasonal_factor,
+                COALESCE(s.revenue_factor, 1.0) as revenue_factor,
+                COALESCE(s.quantity_factor, 1.0) as quantity_factor,
+                s.peak_reason
+            FROM retail_dw.fct_regular_sales f
+            LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
+            LEFT JOIN retail_dw.int_dynamic_seasonal_factor s 
+                ON toMonth(f.transaction_date) = s.month
+            WHERE f.product_code IN ('{product_codes_str}')
+              AND f.transaction_date >= today() - 60
+            ORDER BY f.branch_code, f.product_code, f.transaction_date
+            """
+        else:
+            # Fallback nếu bảng mới chưa tồn tại
+            history_query = f"""
+            SELECT 
+                f.transaction_date as ngay,
+                f.branch_code as chi_nhanh,
+                f.product_code as ma_hang,
+                p.product_name as ten_san_pham,
+                p.category_level_1 as nhom_hang_cap_1,
+                p.category_level_2 as nhom_hang_cap_2,
+                f.gross_revenue as daily_revenue,
+                f.quantity_sold as daily_quantity,
+                f.gross_profit as daily_profit,
+                f.transaction_count,
+                p.brand as thuong_hieu,
+                p.abc_class,
+                0 as is_peak_day,
+                1.0 as seasonal_factor,
+                1.0 as revenue_factor,
+                1.0 as quantity_factor,
+                '' as peak_reason
+            FROM retail_dw.fct_regular_sales f
+            LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
+            WHERE f.product_code IN ('{product_codes_str}')
+              AND f.transaction_date >= today() - 60
+            ORDER BY f.branch_code, f.product_code, f.transaction_date
+            """
         
         history_df = self.ch.query(history_query)
         history_df['ngay'] = pd.to_datetime(history_df['ngay'])
@@ -1279,6 +1492,11 @@ class SalesForecaster:
             # Dự báo cho từng ngày trong tương lai
             for future_date in future_dates:
                 try:
+                    # Lấy seasonal factors cho ngày này
+                    month = future_date.month
+                    sf = seasonal_map.get(month, {})
+                    is_peak = 1 if sf.get('peak_reason') else 0
+                    
                     # Tạo row cho ngày cần dự báo
                     future_row = pd.DataFrame({
                         'ngay': [future_date],
@@ -1289,7 +1507,13 @@ class SalesForecaster:
                         'daily_quantity': [0],
                         'daily_revenue': [0],
                         'daily_profit': [0],
-                        'transaction_count': [0]
+                        'transaction_count': [0],
+                        # DYNAMIC SEASONAL FACTORS - cho XGBoost học
+                        'is_peak_day': [is_peak],
+                        'seasonal_factor': [sf.get('seasonal_factor', 1.0)],
+                        'revenue_factor': [sf.get('revenue_factor', 1.0)],
+                        'quantity_factor': [sf.get('quantity_factor', 1.0)],
+                        'peak_reason': [sf.get('peak_reason', '')]
                     })
                     
                     # Kết hợp lịch sử + ngày cần dự báo
