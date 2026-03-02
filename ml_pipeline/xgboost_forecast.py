@@ -2089,15 +2089,15 @@ class SalesForecaster:
             historical_query = f"""
             SELECT 
                 f.product_code as ma_hang,
-                AVG(f.quantity_sold) as avg_daily_4weeks
+                SUM(f.quantity_sold) as total_4weeks
             FROM retail_dw.fct_regular_sales f
             WHERE f.product_code IN ('{products_str}')
               AND f.transaction_date >= today() - 28
             GROUP BY f.product_code
             """
             historical_df = self.ch.query(historical_query)
-            # Tồn kho tối ưu = trung bình 4 tuần = avg_daily × 28
-            historical_df['ton_kho_toi_uu'] = (historical_df['avg_daily_4weeks'] * 28).round()
+            # Tồn kho tối ưu = doanh số 4 tuần / 4 = trung bình 1 tuần
+            historical_df['ton_kho_toi_uu'] = (historical_df['total_4weeks'] / 4).round()
             inventory_map = dict(zip(historical_df['ma_hang'], historical_df['ton_kho_toi_uu']))
             logger.info(f"✅ Loaded 4-week historical data for {len(inventory_map)} products")
         except Exception as e:
@@ -2144,9 +2144,9 @@ class SalesForecaster:
             ton_kho_toi_uu = int(row['ton_kho_toi_uu'])
             
             # Xác định ưu tiên dựa trên mức độ khan hiếm dự kiến
-            # Nếu dự báo tuần tới cao hơn nhiều so với trung bình 4 tuần -> cần gấp
-            if ton_kho_toi_uu > 0 and forecast_qty > ton_kho_toi_uu / 4 * 1.5:
-                uu_tien = 'Cần gấp'  # Dự báo cao bất thường so với trung bình
+            # Nếu dự báo tuần tới cao hơn 150% so với trung bình tuần (tồn kho tối ưu) -> cần gấp
+            if ton_kho_toi_uu > 0 and forecast_qty > ton_kho_toi_uu * 1.5:
+                uu_tien = 'Cần gấp'  # Dự báo cao bất thường so với trung bình tuần
             else:
                 uu_tien = 'Cần đủ'   # Dự báo bình thường
             
