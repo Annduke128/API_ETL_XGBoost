@@ -2042,7 +2042,8 @@ class SalesForecaster:
         Tạo file CSV đơn hàng cần đặt cho tuần tới
         
         Chọn top N sản phẩm có dự báo cao nhất và tính toán số lượng cần đặt.
-        Format giống như dự báo Model 1 nhưng thêm thông tin đặt hàng.
+        Format đơn giản: stt, mã vạch, tên sản phẩm, số lượng cần đặt, 
+        số lượng tồn kho tối ưu, ưu tiên.
         
         Args:
             forecasts: DataFrame từ predict_next_week(). Nếu None sẽ chạy dự báo mới.
@@ -2065,17 +2066,31 @@ class SalesForecaster:
             logger.error("❌ Không có dữ liệu dự báo để tạo đơn hàng")
             return None
         
+        # Lấy mã vạch từ dim_product
+        try:
+            barcode_query = """
+            SELECT product_code as ma_hang, barcode as ma_vach
+            FROM retail_dw.dim_product
+            WHERE barcode IS NOT NULL AND barcode != ''
+            """
+            barcode_df = self.ch.query(barcode_query)
+            barcode_map = dict(zip(barcode_df['ma_hang'], barcode_df['ma_vach']))
+            logger.info(f"✅ Loaded {len(barcode_map)} product barcodes")
+        except Exception as e:
+            logger.warning(f"⚠️ Không thể load mã vạch: {e}")
+            barcode_map = {}
+        
         # Tổng hợp dự báo theo sản phẩm (7 ngày)
-        product_summary = forecasts.groupby(['ma_hang', 'ten_san_pham', 'nhom_hang_cap_1', 
-                                            'nhom_hang_cap_2', 'abc_class']).agg({
-            'predicted_quantity': 'sum',
-            'predicted_quantity_raw': 'sum',
-            'chi_nhanh': lambda x: ', '.join(x.unique())  # Các chi nhánh có bán
+        product_summary = forecasts.groupby(['ma_hang', 'ten_san_pham']).agg({
+            'predicted_quantity': 'sum'
         }).reset_index()
         
-        product_summary.columns = ['ma_hang', 'ten_san_pham', 'nhom_hang_cap_1', 
-                                   'nhom_hang_cap_2', 'abc_class', 'forecast_7d_quantity',
-                                   'forecast_7d_raw', 'branches']
+        product_summary.columns = ['ma_hang', 'ten_san_pham', 'forecast_7d_quantity']
+        
+        # Thêm mã vạch
+        product_summary['ma_vach'] = product_summary['ma_hang'].map(barcode_map)
+        # Nếu không có mã vạch thì dùng ma_hang
+        product_summary['ma_vach'] = product_summary['ma_vach'].fillna(product_summary['ma_hang'])
         
         # Sắp xếp theo dự báo giảm dần
         product_summary = product_summary.sort_values('forecast_7d_quantity', ascending=False)
@@ -2094,65 +2109,36 @@ class SalesForecaster:
             forecast_qty = row['forecast_7d_quantity']
             avg_daily = forecast_qty / 7
             
-            # Logic tính số lượng đặt hàng
-            suggested_order = round(avg_daily * 30)  # 1 tháng
+            # Số lượng cần đặt: đủ cho 30 ngày (khoảng 1 tháng)
+            so_luong_can_dat = round(avg_daily * 30)
+            
+            # Số lượng tồn kho tối ưu: reorder_point + safety_stock (khoảng 3-4 tuần)
             reorder_point = round(avg_daily * 14)    # 2 tuần
             safety_stock = round(avg_daily * 7 * 1.5)  # 1.5 tuần
+            ton_kho_toi_uu = reorder_point + safety_stock
             
-            # Tính priority score dựa trên ABC class và forecast
-            priority_score = forecast_qty
-            if row['abc_class'] == 'A':
-                priority_score *= 2.0  # Ưu tiên cao cho A
-                priority = 'HIGH'
-            elif row['abc_class'] == 'B':
-                priority_score *= 1.5
-                priority = 'MEDIUM'
-            else:
-                priority_score *= 1.0
-                priority = 'NORMAL'
-            
-            # Xác định status
+            # Xác định ưu tiên
             if forecast_qty > reorder_point * 1.5:
-                status = 'URGENT'
+                uu_tien = 'Cần gấp'  # URGENT
             elif forecast_qty > reorder_point:
-                status = 'NEEDED'
+                uu_tien = 'Cần đủ'   # NEEDED
             else:
-                status = 'PLANNED'
+                uu_tien = 'Cần đủ'   # PLANNED nhưng vẫn là "cần đủ"
             
             purchase_orders.append({
-                # Thông tin sản phẩm (giống Model 1)
                 'stt': len(purchase_orders) + 1,
-                'ma_hang': row['ma_hang'],
-                'ten_san_pham': row['ten_san_pham'],
-                'nhom_hang_cap_1': row['nhom_hang_cap_1'],
-                'nhom_hang_cap_2': row['nhom_hang_cap_2'],
-                'abc_class': row['abc_class'],
-                'branches': row['branches'],
-                
-                # Thông tin dự báo (giống Model 1)
-                'forecast_7d_quantity': round(forecast_qty),
-                'forecast_7d_raw': round(row['forecast_7d_raw'], 2),
-                'avg_daily_demand': round(avg_daily, 2),
-                
-                # Thông tin đặt hàng (mới)
-                'suggested_order_quantity': suggested_order,
-                'reorder_point': reorder_point,
-                'safety_stock': safety_stock,
-                'priority': priority,
-                'priority_score': round(priority_score, 0),
-                'status': status,
-                
-                # Metadata
-                'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'forecast_week': (datetime.now() + timedelta(days=1)).strftime('%Y-W%U')
+                'mã_vạch': row['ma_vach'],
+                'tên_sản_phẩm': row['ten_san_pham'],
+                'số_lượng_cần_đặt': so_luong_can_dat,
+                'số_lượng_tồn_kho_tối_ưu': ton_kho_toi_uu,
+                'ưu_tiên': uu_tien
             })
         
-        # Tạo DataFrame
+        # Tạo DataFrame với đúng thứ tự cột
         po_df = pd.DataFrame(purchase_orders)
         
-        # Sắp xếp lại theo priority score giảm dần
-        po_df = po_df.sort_values('priority_score', ascending=False)
-        po_df['stt'] = range(1, len(po_df) + 1)  # Cập nhật lại STT
+        # Cập nhật lại STT
+        po_df['stt'] = range(1, len(po_df) + 1)
         
         # Xác định output path
         if output_path is None:
@@ -2168,17 +2154,17 @@ class SalesForecaster:
         
         logger.info(f"\n✅ Đã tạo file đơn hàng: {output_path}")
         logger.info(f"   - Số dòng: {len(po_df)}")
-        logger.info(f"   - Tổng số lượng đề xuất: {po_df['suggested_order_quantity'].sum():,.0f} units")
-        logger.info(f"   - Tổng giá trị dự báo: {po_df['forecast_7d_quantity'].sum():,.0f} units")
+        logger.info(f"   - Tổng số lượng cần đặt: {po_df['số_lượng_cần_đặt'].sum():,.0f} units")
+        logger.info(f"   - Tổng tồn kho tối ưu: {po_df['số_lượng_tồn_kho_tối_ưu'].sum():,.0f} units")
         
         # Hiển thị top 10
         logger.info("\n🔥 Top 10 sản phẩm ưu tiên đặt hàng:")
-        logger.info(f"{'STT':<5} {'Mã hàng':<12} {'Tên sản phẩm':<30} {'ABC':<5} {'Dự báo 7d':<12} {'Đặt hàng':<12} {'Ưu tiên'}")
+        logger.info(f"{'STT':<5} {'Mã vạch':<15} {'Tên sản phẩm':<35} {'Cần đặt':<12} {'Tồn kho tối ưu':<15} {'Ưu tiên'}")
         logger.info("-" * 100)
         for _, row in po_df.head(10).iterrows():
-            name_short = row['ten_san_pham'][:28] if len(str(row['ten_san_pham'])) > 28 else row['ten_san_pham']
-            logger.info(f"{row['stt']:<5} {row['ma_hang']:<12} {name_short:<30} {row['abc_class']:<5} "
-                       f"{row['forecast_7d_quantity']:>10,} {row['suggested_order_quantity']:>10,} {row['priority']}")
+            name_short = row['tên_sản_phẩm'][:33] if len(str(row['tên_sản_phẩm'])) > 33 else row['tên_sản_phẩm']
+            logger.info(f"{row['stt']:<5} {row['mã_vạch']:<15} {name_short:<35} "
+                       f"{row['số_lượng_cần_đặt']:>10,} {row['số_lượng_tồn_kho_tối_ưu']:>13,} {row['ưu_tiên']}")
         
         return output_path
     
