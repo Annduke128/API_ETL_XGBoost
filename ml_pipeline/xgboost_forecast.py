@@ -2066,7 +2066,7 @@ class SalesForecaster:
             logger.error("❌ Không có dữ liệu dự báo để tạo đơn hàng")
             return None
         
-        # Lấy mã vạch từ dim_product
+        # Lấy mã vạch và thông tin bổ sung từ dim_product
         try:
             barcode_query = """
             SELECT product_code as ma_hang, barcode as ma_vach
@@ -2080,6 +2080,30 @@ class SalesForecaster:
             logger.warning(f"⚠️ Không thể load mã vạch: {e}")
             barcode_map = {}
         
+        # Lấy trung bình bán hàng 4 tuần gần nhất cho mỗi sản phẩm
+        logger.info("📊 Đang tính tồn kho tối ưu từ dữ liệu 4 tuần gần nhất...")
+        try:
+            product_list = forecasts['ma_hang'].unique().tolist()
+            products_str = "', '".join(product_list)
+            
+            historical_query = f"""
+            SELECT 
+                f.product_code as ma_hang,
+                AVG(f.quantity_sold) as avg_daily_4weeks
+            FROM retail_dw.fct_regular_sales f
+            WHERE f.product_code IN ('{products_str}')
+              AND f.transaction_date >= today() - 28
+            GROUP BY f.product_code
+            """
+            historical_df = self.ch.query(historical_query)
+            # Tồn kho tối ưu = trung bình 4 tuần = avg_daily × 28
+            historical_df['ton_kho_toi_uu'] = (historical_df['avg_daily_4weeks'] * 28).round()
+            inventory_map = dict(zip(historical_df['ma_hang'], historical_df['ton_kho_toi_uu']))
+            logger.info(f"✅ Loaded 4-week historical data for {len(inventory_map)} products")
+        except Exception as e:
+            logger.warning(f"⚠️ Không thể load dữ liệu lịch sử: {e}")
+            inventory_map = {}
+        
         # Tổng hợp dự báo theo sản phẩm (7 ngày)
         product_summary = forecasts.groupby(['ma_hang', 'ten_san_pham']).agg({
             'predicted_quantity': 'sum'
@@ -2089,8 +2113,12 @@ class SalesForecaster:
         
         # Thêm mã vạch
         product_summary['ma_vach'] = product_summary['ma_hang'].map(barcode_map)
-        # Nếu không có mã vạch thì dùng ma_hang
         product_summary['ma_vach'] = product_summary['ma_vach'].fillna(product_summary['ma_hang'])
+        
+        # Thêm tồn kho tối ưu (trung bình 4 tuần)
+        product_summary['ton_kho_toi_uu'] = product_summary['ma_hang'].map(inventory_map)
+        # Nếu không có dữ liệu lịch sử, dùng dự báo làm fallback
+        product_summary['ton_kho_toi_uu'] = product_summary['ton_kho_toi_uu'].fillna(product_summary['forecast_7d_quantity'] * 4)
         
         # Sắp xếp theo dự báo giảm dần
         product_summary = product_summary.sort_values('forecast_7d_quantity', ascending=False)
@@ -2112,13 +2140,13 @@ class SalesForecaster:
             # Số lượng cần đặt: đủ cho 1 tuần tới (dự báo 7 ngày)
             so_luong_can_dat = round(forecast_qty)
             
-            # Số lượng tồn kho tối ưu: đủ cho 1 tuần (7 ngày)
-            ton_kho_toi_uu = round(avg_daily * 7)
+            # Số lượng tồn kho tối ưu: trung bình 4 tuần gần nhất
+            ton_kho_toi_uu = int(row['ton_kho_toi_uu'])
             
             # Xác định ưu tiên dựa trên mức độ khan hiếm dự kiến
-            # Nếu dự báo cao (trên 150% so với trung bình) -> cần gấp
-            if forecast_qty > avg_daily * 7 * 1.5:
-                uu_tien = 'Cần gấp'  # Dự báo cao bất thường
+            # Nếu dự báo tuần tới cao hơn nhiều so với trung bình 4 tuần -> cần gấp
+            if ton_kho_toi_uu > 0 and forecast_qty > ton_kho_toi_uu / 4 * 1.5:
+                uu_tien = 'Cần gấp'  # Dự báo cao bất thường so với trung bình
             else:
                 uu_tien = 'Cần đủ'   # Dự báo bình thường
             
