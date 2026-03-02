@@ -1,0 +1,88 @@
+name: Deploy to K3s Production (Self-Hosted)
+
+on:
+  workflow_run:
+    workflows: ["Docker Build and Push"]
+    types:
+      - completed
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to K3s (Local)
+        env:
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          echo "🚀 Deploying to K3s (Self-Hosted Runner)"
+          
+          # Pull latest images
+          echo "📥 Pulling latest images..."
+          sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest
+          sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-dbt:latest
+          sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/hasu-sync-tool:latest
+          
+          # Update CronJobs
+          echo "🔄 Updating CronJobs..."
+          kubectl set image cronjob/ml-training ml-training=${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest -n hasu-ml
+          kubectl set image cronjob/ml-predict ml-predict=${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest -n hasu-ml
+          kubectl set image cronjob/dbt-daily dbt=${{ secrets.DOCKERHUB_USERNAME }}/hasu-dbt:latest -n hasu-ml
+          
+          # Restart Deployments
+          echo "🔄 Restarting Deployments..."
+          kubectl rollout restart deployment/airflow-webserver -n hasu-ml || true
+          kubectl rollout restart deployment/airflow-scheduler -n hasu-ml || true
+          kubectl rollout restart deployment/superset -n hasu-ml || true
+          kubectl rollout restart deployment/postgres -n hasu-ml || true
+          kubectl rollout restart deployment/clickhouse -n hasu-ml || true
+          kubectl rollout restart deployment/redis -n hasu-ml || true
+          
+          # Wait for rollout
+          echo "⏳ Waiting for rollouts..."
+          kubectl rollout status deployment/airflow-webserver -n hasu-ml --timeout=300s || true
+          kubectl rollout status deployment/airflow-scheduler -n hasu-ml --timeout=300s || true
+          kubectl rollout status deployment/superset -n hasu-ml --timeout=300s || true
+          
+          # Verify
+          echo ""
+          echo "=== Deployment Status ==="
+          kubectl get deployments -n hasu-ml
+          echo ""
+          echo "=== Pod Status ==="
+          kubectl get pods -n hasu-ml
+          
+          # Cleanup
+          echo "🧹 Cleaning up old images..."
+          sudo docker image prune -f --filter "until=168h" || true
+          
+          echo ""
+          echo "✅ Deployment completed!"
+
+      - name: Notify Success
+        if: success()
+        run: |
+          echo "✅ Successfully deployed to K3s!"
+
+      - name: Notify Failure
+        if: failure()
+        run: |
+          echo "❌ Deployment failed!"
+          exit 1
