@@ -31,9 +31,29 @@ jobs:
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
+          echo "Setting up SSH for ${{ secrets.K3S_USER }}@${{ secrets.K3S_HOST }}"
+          
+          # Check if secrets are set
+          if [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]; then
+            echo "❌ ERROR: SSH_PRIVATE_KEY is empty!"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.K3S_HOST }}" ]; then
+            echo "❌ ERROR: K3S_HOST is empty!"
+            exit 1
+          fi
+          
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.K3S_HOST }} >> ~/.ssh/known_hosts
+          
+          # Test if we can resolve the host
+          echo "🔍 Testing connection to ${{ secrets.K3S_HOST }}..."
+          ssh-keyscan -H ${{ secrets.K3S_HOST }} >> ~/.ssh/known_hosts 2>&1 || {
+            echo "❌ ERROR: Cannot reach host ${{ secrets.K3S_HOST }}"
+            exit 1
+          }
+          echo "✅ Host added to known_hosts"
 
       - name: Deploy to K3s Production
         env:
