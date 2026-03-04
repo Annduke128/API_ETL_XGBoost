@@ -55,10 +55,13 @@ help:
 	@echo "║    make check           - Run all checks                         ║"
 	@echo "║                                                                  ║"
 	@echo "║  KUBERNETES / K3S                                                ║"
-	@echo "║    make k8s-deploy      - Update images & restart on K3s         ║"
-	@echo "║    make k8s-deploy-all  - Full deploy all manifests to K3s       ║"
-	@echo "║    make k8s-status      - Check K3s deployment status            ║"
-	@echo "║    make app-k3s         - Alias for k8s-deploy                   ║"
+	@echo "║    make app-k3s         - 🚀 Run FULL pipeline on K3s            ║"
+	@echo "║    make k3s-sync        - Run Sync job on K3s                    ║"
+	@echo "║    make k3s-dbt         - Run DBT build on K3s                   ║"
+	@echo "║    make k3s-ml-train    - Run ML training on K3s                 ║"
+	@echo "║    make k3s-ml-predict  - Run ML predictions on K3s              ║"
+	@echo "║    make k3s-deploy      - Update images & restart deployments    ║"
+	@echo "║    make k3s-status      - Check K3s status                       ║"
 	@echo "║                                                                  ║"
 	@echo "║  DOCKER                                                          ║"
 	@echo "║    cd docker && make help    - Docker commands                   ║"
@@ -276,6 +279,7 @@ app: pipeline-full ml-all
 K8S_DIR := k8s
 NAMESPACE := hasu-ml
 KUBECTL := kubectl
+DOCKERHUB_USERNAME ?= your-dockerhub-user  # Override with: make app-k3s DOCKERHUB_USERNAME=myuser
 
 # Check if running on K3s
 ifeq ($(shell which k3s 2>/dev/null),)
@@ -304,13 +308,17 @@ k8s-deploy-all: kubectl-check
 	@echo "🚀 Full deployment to K3s..."
 	@echo "📁 Creating namespace..."
 	$(KUBECTL_CMD) create namespace $(NAMESPACE) 2>/dev/null || echo "Namespace already exists"
-	@echo "📦 Applying all manifests..."
+	@echo "📦 Applying namespace, storage, config, databases, applications..."
 	$(KUBECTL_CMD) apply -f $(K8S_DIR)/00-namespace/
 	$(KUBECTL_CMD) apply -f $(K8S_DIR)/01-storage/
 	$(KUBECTL_CMD) apply -f $(K8S_DIR)/02-config/
 	$(KUBECTL_CMD) apply -f $(K8S_DIR)/03-databases/
 	$(KUBECTL_CMD) apply -f $(K8S_DIR)/04-applications/
-	$(KUBECTL_CMD) apply -f $(K8S_DIR)/05-ml-pipeline/
+	@echo "📦 Applying ML pipeline manifests with image substitution..."
+	@for file in $(K8S_DIR)/05-ml-pipeline/*.yaml; do \
+		echo "  Applying $$file..."; \
+		sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' $$file | $(KUBECTL_CMD) apply -f -; \
+	done
 	@echo "✅ All resources applied!"
 	@echo "⏳ Waiting for pods to start..."
 	sleep 5
@@ -341,8 +349,120 @@ k8s-delete: kubectl-check
 	$(KUBECTL_CMD) delete namespace $(NAMESPACE)
 	@echo "✅ Namespace deleted"
 
-# Aliases
-app-k3s: k8s-deploy
-k3s-deploy: k8s-deploy
-k3s-status: k8s-status
+# ============================================================================
+# RUN PIPELINE ON K3S
+# ============================================================================
+
+# Check if kubectl is available
+kubectl-check:
+	@which k3s kubectl > /dev/null 2>&1 || which kubectl > /dev/null 2>&1 || (echo "❌ kubectl not found. Please install kubectl or k3s." && exit 1)
+
+# Main command: Run full pipeline on K3s
+app-k3s: kubectl-check
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║           🚀 Running Full Pipeline on K3s Cluster                    ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "This will execute: Sync → DBT → ML Training → Predictions"
+	@echo ""
+	@read -p "Continue? (yes/no): " confirm && [ "$$confirm" = "yes" ] || (echo "Cancelled." && exit 1)
+	
+	@echo ""
+	@echo "📁 Step 0: Deleting old jobs (if any)..."
+	-$(KUBECTL_CMD) delete job sync-data -n $(NAMESPACE) 2>/dev/null || true
+	-$(KUBECTL_CMD) delete job dbt-build -n $(NAMESPACE) 2>/dev/null || true
+	-$(KUBECTL_CMD) delete job ml-train -n $(NAMESPACE) 2>/dev/null || true
+	-$(KUBECTL_CMD) delete job ml-predict -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
+	
+	@echo ""
+	@echo "📥 Step 1: Sync PostgreSQL → ClickHouse"
+	@cat $(K8S_DIR)/05-ml-pipeline/job-sync.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@echo "⏳ Waiting for sync to complete..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/sync-data -n $(NAMESPACE) --timeout=600s
+	@echo "✅ Sync complete!"
+	
+	@echo ""
+	@echo "🏗️ Step 2: DBT Build"
+	@cat $(K8S_DIR)/05-ml-pipeline/job-dbt-build.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@echo "⏳ Waiting for DBT to complete..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/dbt-build -n $(NAMESPACE) --timeout=900s
+	@echo "✅ DBT build complete!"
+	
+	@echo ""
+	@echo "🤖 Step 3: ML Training"
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@echo "⏳ Waiting for training to complete (this may take 15-30 minutes)..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train -n $(NAMESPACE) --timeout=3600s
+	@echo "✅ ML training complete!"
+	
+	@echo ""
+	@echo "🔮 Step 4: Generate Predictions"
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@echo "⏳ Waiting for predictions..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/ml-predict -n $(NAMESPACE) --timeout=600s
+	@echo "✅ Predictions complete!"
+	
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║           ✅ FULL PIPELINE COMPLETE ON K3s!                          ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "Check results: make k3s-logs"
+
+# Individual pipeline steps on K3s
+k3s-sync: kubectl-check
+	@echo "📥 Running Sync on K3s..."
+	-$(KUBECTL_CMD) delete job sync-data -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
+	@cat $(K8S_DIR)/05-ml-pipeline/job-sync.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	$(KUBECTL_CMD) wait --for=condition=complete job/sync-data -n $(NAMESPACE) --timeout=600s
+	@echo "✅ Sync complete!"
+
+k3s-dbt: kubectl-check
+	@echo "🏗️ Running DBT on K3s..."
+	-$(KUBECTL_CMD) delete job dbt-build -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
+	@cat $(K8S_DIR)/05-ml-pipeline/job-dbt-build.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	$(KUBECTL_CMD) wait --for=condition=complete job/dbt-build -n $(NAMESPACE) --timeout=900s
+	@echo "✅ DBT complete!"
+
+k3s-ml-train: kubectl-check
+	@echo "🤖 Running ML Training on K3s..."
+	-$(KUBECTL_CMD) delete job ml-train -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train -n $(NAMESPACE) --timeout=3600s
+	@echo "✅ Training complete!"
+
+k3s-ml-predict: kubectl-check
+	@echo "🔮 Running ML Predictions on K3s..."
+	-$(KUBECTL_CMD) delete job ml-predict -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	$(KUBECTL_CMD) wait --for=condition=complete job/ml-predict -n $(NAMESPACE) --timeout=600s
+	@echo "✅ Predictions complete!"
+
+# Deploy commands
+k3s-deploy: kubectl-check
+	@echo "🚀 Updating images on K3s..."
+	$(KUBECTL_CMD) rollout restart deployment/airflow-webserver -n $(NAMESPACE) || true
+	$(KUBECTL_CMD) rollout restart deployment/airflow-scheduler -n $(NAMESPACE) || true
+	$(KUBECTL_CMD) rollout restart deployment/superset -n $(NAMESPACE) || true
+	@echo "✅ Restart triggered!"
+
+k3s-status: kubectl-check
+	@echo "📊 K3s Status"
+	@echo "============="
+	@echo "Jobs:"
+	$(KUBECTL_CMD) get jobs -n $(NAMESPACE)
+	@echo ""
+	@echo "Pods:"
+	$(KUBECTL_CMD) get pods -n $(NAMESPACE)
+
+k3s-logs: kubectl-check
+	@echo "📜 Logs from latest jobs..."
+	$(KUBECTL_CMD) logs -n $(NAMESPACE) job/sync-data --tail=50 2>/dev/null || echo "No sync logs"
+	$(KUBECTL_CMD) logs -n $(NAMESPACE) job/ml-train --tail=50 2>/dev/null || echo "No training logs"
 

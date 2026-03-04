@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ml-train
+  namespace: hasu-ml
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: ml
+        image: ${DOCKERHUB_USERNAME}/hasu-ml-pipeline:latest
+        imagePullPolicy: Always
+        command: ["python", "train_models.py", "--trials", "30"]
+        envFrom:
+        - configMapRef:
+            name: hasu-ml-config
+        - secretRef:
+            name: hasu-ml-secrets
+        volumeMounts:
+        - name: ml-models
+          mountPath: /app/models
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2000m"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+      volumes:
+      - name: ml-models
+        persistentVolumeClaim:
+          claimName: ml-models

@@ -14,7 +14,7 @@ spec:
       - name: dockerhub-credentials
       containers:
       - name: dbt
-        image: your-dockerhub-user/hasu-dbt:latest
+        image: ${DOCKERHUB_USERNAME}/hasu-dbt:latest
         imagePullPolicy: Always
         command: ["dbt"]
         args: 
@@ -54,7 +54,7 @@ spec:
           - name: dockerhub-credentials
           containers:
           - name: dbt
-            image: your-dockerhub-user/hasu-dbt:latest
+            image: ${DOCKERHUB_USERNAME}/hasu-dbt:latest
             imagePullPolicy: Always
             command: ["dbt"]
             args: 

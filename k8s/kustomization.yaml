@@ -32,6 +32,6 @@ resources:
 
 # Images to be replaced by kustomize
 images:
-  - name: your-dockerhub-user/hasu-ml-pipeline
+  - name: ${DOCKERHUB_USERNAME}/hasu-ml-pipeline
     newName: your-dockerhub-user/hasu-ml-pipeline
     newTag: latest

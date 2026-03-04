@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ml-predict
+  namespace: hasu-ml
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: ml
+        image: ${DOCKERHUB_USERNAME}/hasu-ml-pipeline:latest
+        imagePullPolicy: Always
+        command: 
+        - python
+        - -c
+        - |
+          from xgboost_forecast import SalesForecaster
+          f = SalesForecaster()
+          p = f.predict_next_week()
+          f.save_forecasts(p)
+          print("✅ Predictions generated and saved")
+        envFrom:
+        - configMapRef:
+            name: hasu-ml-config
+        - secretRef:
+            name: hasu-ml-secrets
+        volumeMounts:
+        - name: ml-models
+          mountPath: /app/models
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+      volumes:
+      - name: ml-models
+        persistentVolumeClaim:
+          claimName: ml-models

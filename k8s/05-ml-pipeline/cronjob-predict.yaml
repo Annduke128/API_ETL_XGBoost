@@ -20,7 +20,7 @@ spec:
           - name: dockerhub-credentials
           containers:
           - name: ml-predict
-            image: your-dockerhub-user/hasu-ml-pipeline:latest
+            image: ${DOCKERHUB_USERNAME}/hasu-ml-pipeline:latest
             imagePullPolicy: Always  # Always pull latest for auto-update
             command: ["python", "-c"]
             args:

@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dbt-build
+  namespace: hasu-ml
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: dbt
+        image: ${DOCKERHUB_USERNAME}/hasu-dbt:latest
+        imagePullPolicy: Always
+        command: ["dbt", "build", "--select", "staging,marts", "--target", "clickhouse"]
+        envFrom:
+        - configMapRef:
+            name: hasu-ml-config
+        - secretRef:
+            name: hasu-ml-secrets
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"

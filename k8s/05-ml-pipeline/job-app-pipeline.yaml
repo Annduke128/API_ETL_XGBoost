@@ -1,0 +1,62 @@
+# Job chạy toàn bộ pipeline: Sync → DBT → ML → Predict
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: app-pipeline
+  namespace: hasu-ml
+  labels:
+    app: app-pipeline
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: pipeline
+        image: ${DOCKERHUB_USERNAME}/hasu-ml-pipeline:latest
+        imagePullPolicy: Always
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -e
+          echo "=========================================="
+          echo "🚀 Running Full Pipeline on K3s"
+          echo "=========================================="
+          
+          # Step 1: Sync data
+          echo ""
+          echo "📥 Step 1: Sync PostgreSQL → ClickHouse"
+          python /app/sync_to_clickhouse.py
+          
+          # Step 2: DBT Build
+          echo ""
+          echo "🏗️ Step 2: Running DBT"
+          cd /usr/app/dbt && dbt build --select staging,marts --target clickhouse
+          
+          # Step 3: ML Training
+          echo ""
+          echo "🤖 Step 3: Training ML Models"
+          cd /app && python train_models.py --trials 30
+          
+          # Step 4: Generate Predictions
+          echo ""
+          echo "🔮 Step 4: Generating Predictions"
+          python -c "from xgboost_forecast import SalesForecaster; f = SalesForecaster(); p = f.predict_next_week(); f.save_forecasts(p)"
+          
+          echo ""
+          echo "=========================================="
+          echo "✅ Pipeline Complete!"
+          echo "=========================================="
+        envFrom:
+        - configMapRef:
+            name: hasu-ml-config
+        - secretRef:
+            name: hasu-ml-secrets
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2000m"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+      # Run as individual jobs instead of one big job for better control
