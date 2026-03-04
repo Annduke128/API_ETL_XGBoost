@@ -13,72 +13,66 @@
 - BI Dashboard với Apache Superset
 - ML Forecasting dự báo bán hàng sử dụng XGBoost
 
-### Kiến trúc hệ thống
+### 2 Môi trường Triển khai
 
-```
-CSV Input ──▶ PostgreSQL (OLTP) ──▶ ClickHouse (DW) ──▶ BI/Analytics
-     │              │                    │
-     ▼              ▼                    ▼
- Data Cleaning   Transactions      Fact Tables
-                 Products          Aggregations
-                 Customers         Time-series
-```
+Dự án hỗ trợ **2 cách triển khai** hoàn toàn khác nhau:
+
+| Môi trường | Vị trí | Mục đích | Cách chạy |
+|------------|--------|----------|-----------|
+| **Development** | `docker/` | Local dev, testing | `make up` trong docker/ |
+| **Production** | `k8s/` | K3s cluster, real deployment | GitHub Actions → K3s |
 
 ---
 
 ## 🏗️ Cấu trúc thư mục
 
 ```
-retail_data_pipeline/
-├── airflow/
-│   ├── dags/
-│   │   └── retail_pipeline_dag.py    # DAGs cho Airflow
-│   └── plugins/                       # Plugins tùy chỉnh
-├── config/                            # Cấu hình chung
-├── csv_input/                         # Thư mục chứa CSV cần xử lý
-│   ├── processed/                     # Đã xử lý
-│   └── error/                         # Lỗi
-├── csv_output/                        # Kết quả xử lý
-├── data_cleaning/                     # Module làm sạch dữ liệu
-│   ├── auto_process_csv.py           # Xử lý tự động
-│   ├── csv_processor.py              # Class làm sạch chính
-│   ├── csv_watcher.py                # Theo dõi file mới
-│   ├── db_connectors.py              # Kết nối database
-│   ├── redis_buffer.py               # Redis cache
-│   ├── Dockerfile
-│   └── requirements.txt
-├── dbt_retail/                        # DBT project
-│   ├── models/
-│   │   ├── staging/                   # Làm sạch dữ liệu gốc
-│   │   ├── intermediate/              # Transform trung gian
-│   │   └── marts/                     # Facts & Dimensions
-│   │       ├── core/                  # dim_date, dim_product, dim_branch
-│   │       ├── sales/                 # fct_daily_sales, fct_monthly_sales
-│   │       ├── inventory/             # fct_inventory_forecast_input
-│   │       └── customers/             # fct_rfm_analysis
-│   ├── macros/                        # Hàm tiện ích SQL
-│   ├── seeds/                         # Dữ liệu tham chiếu
-│   ├── tests/                         # DBT tests
-│   ├── dbt_project.yml               # Cấu hình DBT
-│   └── profiles.yml                   # Kết nối database
-├── init/                              # Khởi tạo database
-│   ├── clickhouse/
-│   └── postgres/
-├── ml_pipeline/                       # Machine Learning
-│   ├── xgboost_forecast.py           # Dự báo XGBoost
-│   ├── db_connectors.py              # Kết nối DB cho ML
-│   ├── Dockerfile
-│   └── requirements.txt
-├── superset/                          # BI Configuration
-│   ├── superset_config.py
-│   ├── create_clickhouse_conn.py
-│   └── docker-bootstrap.sh
-├── .env                               # Environment variables
-├── docker-compose.yml                 # Định nghĩa services
-├── Makefile                          # Các lệnh thường dùng
-├── README.md                          # Tài liệu ngườ i dùng
-├── ARCHITECTURE.md                    # Kiến trúc chi tiết
-└── QUICK_REFERENCE.md                 # Tham khảo nhanh
+Hasu_ML_k3s/
+├── 📁 docker/                    # 🐳 DOCKER COMPOSE - Development
+│   ├── docker-compose.yml        # Định nghĩa services
+│   ├── Makefile                  # Commands cho Docker
+│   ├── .env.example              # Template biến môi trường
+│   ├── data_cleaning/            # Sync Tool Dockerfile
+│   ├── dbt_retail/               # DBT Dockerfile
+│   ├── ml_pipeline/              # ML Pipeline Dockerfile
+│   └── README.md                 # Hướng dẫn Docker
+│
+├── 📁 k8s/                       # ☸️ KUBERNETES/K3s - Production
+│   ├── 00-namespace/             # Namespace, Network Policies
+│   ├── 01-storage/               # StorageClass, PVCs
+│   ├── 02-config/                # ConfigMaps, Secrets
+│   ├── 03-databases/             # PostgreSQL, ClickHouse, Redis
+│   ├── 04-applications/          # Airflow, Superset
+│   ├── 05-ml-pipeline/           # ML Jobs, CronJobs
+│   ├── scripts/                  # Helper scripts
+│   └── README.md                 # Hướng dẫn K3s
+│
+├── 📁 dbt_retail/                # DBT Project (shared)
+│   ├── models/                   # Staging, Intermediate, Marts
+│   ├── macros/                   # Custom SQL functions
+│   ├── seeds/                    # Reference data
+│   └── tests/                    # Data tests
+│
+├── 📁 ml_pipeline/               # ML Pipeline (shared)
+│   ├── xgboost_forecast.py       # Main forecasting script
+│   ├── train_models.py           # Training entry point
+│   └── assets/                   # Email templates, logos
+│
+├── 📁 data_cleaning/             # ETL Scripts (shared)
+│   ├── auto_process_csv.py       # Auto CSV processor
+│   ├── csv_processor.py          # Core cleaning logic
+│   └── sync_to_clickhouse.py     # PostgreSQL → ClickHouse sync
+│
+├── 📁 airflow/                   # Airflow DAGs
+│   └── dags/
+│       └── retail_pipeline_dag.py
+│
+├── 📁 csv_input/                 # CSV files (gitignored)
+├── 📁 csv_output/                # Processed output
+│
+├── Makefile                      # Root Makefile (2 environments)
+├── README.md                     # Main documentation
+└── AGENTS.md                     # This file
 ```
 
 ---
@@ -95,109 +89,139 @@ retail_data_pipeline/
 | **Orchestration** | Apache Airflow 2.8 | Scheduling, workflow |
 | **BI** | Apache Superset 2.1 | Dashboard, visualization |
 | **ML** | XGBoost, Optuna, scikit-learn | Dự báo bán hàng + Hyperparameter tuning |
-| **Container** | Docker, Docker Compose | Triển khai, quản lý services |
+| **Container** | Docker, Docker Compose | Dev environment |
+| **Orchestration** | K3s, Kubernetes | Production deployment |
+| **CI/CD** | GitHub Actions | Auto build & deploy |
 
 ---
 
 ## 🚀 Build và Run Commands
 
-### Khởi động hệ thống (sử dụng Makefile)
+### 🐳 Development - Docker Compose
+
+> Chạy trong thư mục `docker/`
 
 ```bash
-# Khởi động tất cả services
-make up
+cd docker
 
-# Kiểm tra health
-make health
+# Khởi động
+make up                 # Infrastructure cơ bản
+make up-ml              # Kèm ML Pipeline
+make up-all             # Tất cả services
 
-# Xem status
-make status
+# Kiểm tra
+make health             # Health check all
+make status             # Xem container status
+make logs               # Xem logs
 
-# Dừng hệ thống
-make down
+# Data Pipeline
+make sync-to-ch         # Sync PostgreSQL → ClickHouse
+make dbt-build          # Build all DBT models
+make dbt-test           # Run tests
 
-# Restart
-make restart
+# ML Pipeline
+make ml                 # Train với Optuna (50 trials)
+make ml-fast            # Train nhanh (no tuning)
+make ml-optimal         # Train tối ưu (100 trials)
+make ml-all             # Train + Predict + Email
+make ml-predict         # Predict only
+
+# Dừng/Dọn dẹp
+make down               # Stop services
+make down-v             # Stop + remove volumes
+make clean              # Dọn Docker cache
 ```
 
-### Xử lý dữ liệu CSV
+### ☸️ Production - K3s
+
+> Chạy từ root (yêu cầu kubectl connect đến K3s cluster)
 
 ```bash
-# Process CSV 1 lần (manual)
-make csv-import
+# Deploy toàn bộ hệ thống
+make k8s-deploy-all     # Deploy all K8s resources
 
-# Process CSV + chạy DBT transform
-make csv-process-full
+# Chạy pipeline từng bước
+make k3s-sync           # Chạy sync job
+make k3s-dbt            # Chạy DBT build
+make k3s-ml-train       # Train ML models
+make k3s-ml-predict     # Generate predictions
 
-# Xóa dữ liệu đã xử lý
-make csv-reset
+# Hoặc chạy full pipeline
+make app-k3s DOCKERHUB_USERNAME=yourusername
+
+# Kiểm tra
+make k8s-status         # Xem K8s status
+make k8s-logs           # Xem logs
+
+# Xóa
+make k8s-delete         # Xóa namespace (⚠️ mất dữ liệu)
 ```
 
-**Lưu ý:** CSV import được schedule tự động trong Airflow DAG `csv_daily_import` chạy lúc 2h sáng mỗi ngày.
+### 🔄 CI/CD - GitHub Actions
 
-### DBT Commands
+**Workflow files:**
+- `.github/workflows/docker-build-push.yml` - Build & push images
+- `.github/workflows/deploy-k3s-selfhosted.yml` - Deploy to K3s
 
-```bash
-# Run tất cả models
-make dbt
+**Triggers:**
+- Push to `main` → Auto build & deploy
+- Manual dispatch → `workflow_dispatch`
 
-# Load seed data
-make dbt-seed
-
-# Run tests
-make dbt-test
-
-# Generate và serve docs (port 8080)
-make dbt-docs
+**Required Secrets:**
+```yaml
+DOCKERHUB_USERNAME      # Docker Hub username
+DOCKERHUB_TOKEN         # Docker Hub access token
+POSTGRES_PASSWORD       # PostgreSQL password
+CLICKHOUSE_PASSWORD     # ClickHouse password
 ```
 
-### ML Pipeline
+---
 
-```bash
-# Train models với Optuna tuning (50 trials - default)
-make ml
-make ml-train
+## 🔄 Luồng hoạt động
 
-# Train nhanh (không tuning)
-make ml-train-fast
+### Development (Docker)
 
-# Train tối ưu (100 trials)
-make ml-train-optimal
-
-# Train + Generate forecasts
-make ml-train-predict
-
-# Generate predictions từ model đã train
-make ml-predict
+```
+Developer → Code Change → Local Test (docker) → Commit → Push
+                                ↓
+                    make up → make app → verify
 ```
 
-### Database CLI
+### Production (K3s)
 
-```bash
-# PostgreSQL
-make psql
-
-# ClickHouse
-make clickhouse
-
-
-# Redis
-make redis
+```
+Developer → Push to main → GitHub Actions → Build Images
+                                              ↓
+                                         Push to Docker Hub
+                                              ↓
+                                    Self-Hosted Runner on K3s
+                                              ↓
+                                    Pull & Deploy to K3s
 ```
 
 ---
 
 ## 📊 Service Ports
 
+### Docker (localhost)
+
 | Service | Port | Mô tả |
 |---------|------|-------|
 | PostgreSQL | 5432 | OLTP Database |
-| ClickHouse HTTP | 8123 | Data Warehouse (HTTP) |
-| ClickHouse Native | 9000 | Data Warehouse (Native) |
+| ClickHouse HTTP | 8123 | Data Warehouse |
+| ClickHouse Native | 9000 | Data Warehouse |
 | Redis | 6379 | Buffer & Cache |
-| Airflow Web | 8085 | Workflow Scheduler UI |
+| Airflow Web | 8085 | Workflow Scheduler |
 | Superset | 8088 | BI Dashboard |
-| DBT Docs | 8080 | Documentation (khi chạy) |
+
+### K3s (NodePort)
+
+| Service | NodePort | Mô tả |
+|---------|----------|-------|
+| Airflow | 30080 | Workflow Scheduler |
+| Superset | 30088 | BI Dashboard |
+| PostgreSQL | ClusterIP only | Dùng port-forward |
+| ClickHouse | ClusterIP only | Dùng port-forward |
 
 ---
 
@@ -256,113 +280,109 @@ columns:
 
 Chạy tests:
 ```bash
-make dbt-test
+# Docker
+cd docker && make dbt-test
+
+# K3s
+kubectl apply -f k8s/05-ml-pipeline/job-dbt-test.yaml -n hasu-ml
 ```
 
 ### Health Checks
 
 ```bash
-# Tất cả services
+# Docker
 make health
 
-# Từng service
-make health-postgres
-make health-clickhouse
-make health-redis
-make health-superset
+# K3s
+kubectl get pods -n hasu-ml
+kubectl logs -n hasu-ml deployment/postgres
 ```
 
 ---
 
 ## 🔐 Security Considerations
 
-### Default Credentials (Development Only)
+### Docker (Development)
 
-> ⚠️ **WARNING**: Thay đổi mật khẩu mặc định trước khi deploy production!
+Default credentials (chỉ dùng cho dev):
 
 | Service | Username | Password |
 |---------|----------|----------|
 | PostgreSQL | retail_user | retail_password |
 | ClickHouse | default | clickhouse_password |
-
 | Airflow | admin | admin |
 | Superset | admin | admin |
 
-### Environment Variables
+> ⚠️ **WARNING**: Thay đổi mật khẩu mặc định trong `.env`!
 
-Các biến môi trường được định nghĩa trong `.env`:
+### K3s (Production)
+
+- Secrets được lưu trong GitHub Secrets
+- Auto-inject vào Kubernetes Secrets qua GitHub Actions
+- Không bao giờ commit secrets vào repo!
 
 ```bash
-# Database connections
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=retail_db
-POSTGRES_USER=retail_user
-POSTGRES_PASSWORD=retail_password
-
-# ClickHouse
-CLICKHOUSE_HOST=localhost
-CLICKHOUSE_PORT=9000
-CLICKHOUSE_DB=retail_dw
-CLICKHOUSE_USER=default
-CLICKHOUSE_PASSWORD=clickhouse_password
+# Kiểm tra secrets trong K3s
+kubectl get secrets -n hasu-ml
+kubectl describe secret hasu-ml-secrets -n hasu-ml
 ```
 
 ---
 
 ## 📁 Key Configuration Files
 
-| File | Mục đích |
-|------|----------|
-| `docker-compose.yml` | Định nghĩa tất cả Docker services |
-| `Makefile` | Tự động hóa các lệnh thường dùng |
-| `.env` | Biến môi trường |
-| `dbt_retail/dbt_project.yml` | Cấu hình DBT project |
-| `dbt_retail/profiles.yml` | Kết nối database cho DBT |
-| `dbt_retail/packages.yml` | Dependencies DBT packages |
-| `superset/superset_config.py` | Cấu hình Superset |
+| File | Mục đích | Environment |
+|------|----------|-------------|
+| `docker/.env` | Biến môi trường Docker | Dev |
+| `docker/docker-compose.yml` | Định nghĩa services | Dev |
+| `k8s/02-config/configmap.yaml` | K8s ConfigMap | Prod |
+| `k8s/02-config/secrets-template.yaml` | Template secrets | Prod |
+| `dbt_retail/dbt_project.yml` | Cấu hình DBT | Both |
+| `dbt_retail/profiles.yml` | Kết nối database | Both |
+| `.github/workflows/*.yml` | CI/CD pipelines | Prod |
 
 ---
 
 ## 🔍 Debugging và Troubleshooting
 
-### Xem logs
+### Docker
 
 ```bash
-# Tất cả services
+cd docker
+
+# Xem logs
 make logs
+make logs-ml-pipeline
 
-# Specific service
-docker-compose logs -f postgres
-docker-compose logs -f clickhouse
-docker-compose logs -f airflow-webserver
-```
+# Reset dữ liệu
+make reset-db           # Reset database (giữ CSV)
+make reset-all          # Full reset (⚠️ xóa tất cả)
 
-### Reset dữ liệu
-
-```bash
-# Reset database (giữ CSV files)
-make reset-db
-
-# Full reset (⚠️ xóa tất cả data)
-make reset-all
-```
-
-### Clean Docker
-
-```bash
+# Clean Docker
 make clean
-# Hoặc thủ công:
-docker system prune -f
-docker volume prune -f
 ```
 
-### Common Issues
+### K3s
 
-1. **Port đã được sử dụng**: Kiểm tra `sudo lsof -i :5432`
-2. **Container unhealthy**: `docker-compose restart <service>`
-3. **DBT connection refused**: Kiểm tra `POSTGRES_HOST` environment variable
-4. **Redis cache cũ**: `docker-compose exec redis redis-cli FLUSHDB`
+```bash
+# Xem logs
+kubectl logs -f deployment/postgres -n hasu-ml
+kubectl logs -f deployment/clickhouse -n hasu-ml
+
+# Check events
+kubectl get events -n hasu-ml --sort-by='.lastTimestamp'
+
+# Pod không start
+kubectl describe pod <pod-name> -n hasu-ml
+
+# PVC pending
+kubectl get pvc -n hasu-ml
+kubectl describe pvc <pvc-name> -n hasu-ml
+
+# Port forward để debug
+kubectl port-forward svc/postgres 5432:5432 -n hasu-ml
+kubectl port-forward svc/clickhouse 8123:8123 -n hasu-ml
+```
 
 ---
 
@@ -385,21 +405,40 @@ docker volume prune -f
 
 ## 🤝 Development Workflow
 
-1. **Thay đổi code** → Test locally
-2. **Chạy DBT** → `make dbt`
-3. **Chạy tests** → `make dbt-test`
-4. **Kiểm tra health** → `make health`
-5. **Commit changes**
+### Quy trình làm việc
 
----
+1. **Local Development**
+   ```bash
+   cd docker
+   make up
+   # Code changes
+   make app  # Test full pipeline
+   ```
 
-## 📚 Tài liệu tham khảo
+2. **Test DBT changes**
+   ```bash
+   cd dbt_retail
+   dbt deps
+   dbt build --select staging,marts
+   ```
 
-- `README.md` - Hướng dẫn chi tiết ngườ i dùng
-- `ARCHITECTURE.md` - Kiến trúc hệ thống và database
-- `QUICK_REFERENCE.md` - Cheat sheet commands
+3. **Test ML changes**
+   ```bash
+   cd docker
+   make ml-fast  # Quick test
+   ```
 
----
+4. **Commit & Push**
+   ```bash
+   git add .
+   git commit -m "feat: mô tả thay đổi"
+   git push origin main
+   ```
+
+5. **GitHub Actions tự động deploy**
+   - Build images
+   - Push to Docker Hub
+   - Deploy to K3s
 
 ---
 
@@ -410,7 +449,8 @@ docker volume prune -f
 | File/Pattern | Lý do |
 |-------------|-------|
 | `.env` | Chứa password, API keys |
-| `csv_input/*.csv` | Dữ liệu thô, không commit |
+| `k8s/02-config/secrets.yaml` | Secrets thực tế |
+| `csv_input/*.csv` | Dữ liệu thô |
 | `*.pkl`, `*.joblib` | ML models (lớn, tái tạo được) |
 | `ml_pipeline/email_config.yaml` | Email cá nhân |
 | `__pycache__/` | Python cache |
@@ -434,15 +474,9 @@ git diff --cached --name-only
 # 5. Commit
 git commit -m "feat: Mô tả thay đổi"
 
-# 6. Push (cần cấu hình token/SSH)
+# 6. Push (CI/CD sẽ tự động chạy)
 git push origin main
 ```
-
-Xem chi tiết trong `GIT_COMMIT_GUIDE.md`
-
----
-
-**Last Updated**: 2024-02-14
 
 ---
 
@@ -450,20 +484,17 @@ Xem chi tiết trong `GIT_COMMIT_GUIDE.md`
 
 ### Batch Query Optimization
 
-Hệ thống ML đã được tối ưu để tránh N+1 query problem:
-
 ```python
 # ❌ CŨ: N+1 Query (chậm)
-for product in products:           # ~1300 lần
-    for branch in branches:        # ~3 lần
+for product in products:
+    for branch in branches:
         query = f"SELECT * WHERE ma_hang = '{product}'"
         df = client.query(query)   # 3900 queries!
 
 # ✅ MỚI: Batch Query (nhanh)
-products = ['SP001', 'SP002', ...]  # Top 15 ABC
+products = ['SP001', 'SP002', ...]
 query = f"SELECT * WHERE ma_hang IN {products}"  # 1 query
 history_df = client.query(query)
-# Xử lý trong memory với pandas groupby
 ```
 
 | Metric | Trước | Sau | Cải thiện |
@@ -473,45 +504,12 @@ history_df = client.query(query)
 
 ### ABC-based Product Selection
 
-ML prediction chỉ tập trung vào sản phẩm có giá trị cao:
-
 ```sql
--- Logic: Phân loại ABC trong DBT (int_product_performance.sql)
 CASE 
-    WHEN cum_revenue_pct <= 0.8 THEN 'A'  -- Top 80% doanh thu
-    WHEN cum_revenue_pct <= 0.95 THEN 'B' -- 80-95% doanh thu
-    ELSE 'C'                               -- 95-100% doanh thu
+    WHEN cum_revenue_pct <= 0.8 THEN 'A'
+    WHEN cum_revenue_pct <= 0.95 THEN 'B'
+    ELSE 'C'
 END as abc_class
-```
-
-| Class | Số lượng | % Doanh thu | ML Action |
-|-------|----------|-------------|-----------|
-| A | Top 5 | ~80% | Dự báo chi tiết |
-| B | Top 5 | ~15% | Dự báo chi tiết |
-| C | Top 5 | ~5% | Dự báo chi tiết |
-| Khác | ~1,285 | ~0% | Bỏ qua / Ước tính |
-
-### Adaptive Features
-
-Tự động điều chỉnh features dựa trên số ngày dữ liệu có sẵn:
-
-```python
-def create_features(self, df):
-    n_days = df['ngay'].nunique()
-    
-    # Chọn lag phù hợp với dữ liệu
-    if n_days >= 30:
-        available_lags = [1, 7, 14, 30]
-    elif n_days >= 14:
-        available_lags = [1, 7, 14]
-    elif n_days >= 7:
-        available_lags = [1, 7]
-    else:
-        available_lags = [1]
-    
-    # Tạo lag features
-    for lag in available_lags:
-        df[f'lag_{lag}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'].shift(lag)
 ```
 
 ### ML API Reference
@@ -522,20 +520,67 @@ from ml_pipeline.xgboost_forecast import SalesForecaster
 # Khởi tạo
 forecaster = SalesForecaster(model_dir='/app/models')
 
-# Training với Optuna tuning
+# Training
 metrics = forecaster.train_all_models(
     use_tuning=True,
     tuning_method='optuna',
-    n_trials=50,
-    days=365
+    n_trials=50
 )
 
-# Prediction với ABC filter (mặc định)
+# Prediction
 forecasts = forecaster.predict_next_week(
-    use_abc_filter=True,   # Chỉ dự báo Top 15 ABC
-    abc_top_n=5            # Top 5 từ mỗi loại
+    use_abc_filter=True,
+    abc_top_n=5
 )
-
-# Prediction tất cả sản phẩm (chậm)
-forecasts = forecaster.predict_next_week(use_abc_filter=False)
 ```
+
+---
+
+## 📚 Tài liệu tham khảo
+
+| File | Mô tả |
+|------|-------|
+| `README.md` | Tổng quan dự án, 2 cách triển khai |
+| `docker/README.md` | Chi tiết Docker Compose |
+| `k8s/README.md` | Chi tiết K3s deployment |
+| `ARCHITECTURE.md` | Kiến trúc hệ thống và database |
+
+---
+
+## ⚠️ Lưu ý quan trọng cho Agents
+
+### 1. Phân biệt 2 môi trường
+
+| Tình huống | Hành động |
+|------------|-----------|
+| User chạy local/test | Làm việc trong `docker/` |
+| User deploy production | Làm việc trong `k8s/` |
+| User muốn CI/CD | Cập nhật `.github/workflows/` |
+
+### 2. Docker Image Naming
+
+```yaml
+# Development
+image: ml-pipeline:latest          # Build local
+
+# Production  
+image: ${DOCKERHUB_USERNAME}/hasu-ml-pipeline:latest  # Docker Hub
+```
+
+### 3. Path differences
+
+| Context | Path |
+|---------|------|
+| Docker | `/app/models`, `/csv_input` |
+| K8s | Cùng path nhưng dùng PVC mounts |
+
+### 4. Secrets management
+
+| Environment | Cách lưu |
+|-------------|----------|
+| Docker | `.env` file |
+| K3s | GitHub Secrets → K8s Secrets |
+
+---
+
+**Last Updated**: 2026-03-03

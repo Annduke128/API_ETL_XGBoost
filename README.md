@@ -2,22 +2,35 @@
 
 Hệ thống data pipeline hoàn chỉnh với ETL tự động, Data Warehouse, BI Dashboard và ML Forecasting.
 
+**🌐 Ngôn ngữ**: Tiếng Việt (tài liệu, comments, tên biến có ý nghĩa)
+
+---
+
 ## 📋 Mục lục
 
-1. [Kiến trúc hệ thống](#kiến-trúc-hệ-thống)
-2. [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
+1. [Tổng quan](#tổng-quan)
+2. [Kiến trúc hệ thống](#kiến-trúc-hệ-thống)
 3. [Triển khai](#triển-khai)
-4. [Kiểm tra healthcheck](#kiểm-tra-healthcheck)
-5. [Import dữ liệu CSV](#import-dữ-liệu-csv)
-6. [Chạy DBT Project](#chạy-dbt-project)
-7. [Chạy ML Models](#chạy-ml-models)
-8. [Tùy chỉnh tham số](#tùy-chỉnh-tham-số)
+   - [Cách 1: Docker Compose (Dev/Test)](#cách-1-docker-compose-devtest)
+   - [Cách 2: K3s Cluster + GitHub Actions (Production)](#cách-2-k3s-cluster--github-actions-production)
+4. [So sánh 2 cách triển khai](#so-sánh-2-cách-triển-khai)
+5. [Kiểm tra healthcheck](#kiểm-tra-healthcheck)
+6. [Import dữ liệu CSV](#import-dữ-liệu-csv)
+7. [Chạy DBT Project](#chạy-dbt-project)
+8. [Chạy ML Models](#chạy-ml-models)
 9. [Kết nối Superset BI](#kết-nối-superset-bi)
 10. [Troubleshooting](#troubleshooting)
-11. [Hệ thống Phân loại Cửa hàng](#hệ-thống-phân-loại-cửa-hàng)
-12. [Phân loại ABC & Quản lý Sản phẩm](#phân-loại-abc--quản-lý-sản-phẩm)
-13. [Email Notification System](#email-notification-system)
-14. [Assortment Analytics](#assortment-analytics)
+
+---
+
+## 🎯 Tổng quan
+
+Dự án cung cấp **2 cách triển khai** phù hợp với từng môi trường:
+
+| Môi trường | Phương pháp | Mục đích | Độ phức tạp |
+|------------|-------------|----------|-------------|
+| **Development / Testing** | Docker Compose | Test local, phát triển tính năng | ⭐ Thấp |
+| **Production / Staging** | K3s + GitHub Actions | Deploy thực tế, auto-scaling, CI/CD | ⭐⭐⭐ Cao |
 
 ---
 
@@ -61,79 +74,53 @@ Hệ thống data pipeline hoàn chỉnh với ETL tự động, Data Warehouse,
 | **PostgreSQL** | 5432 | OLTP Database - Lưu giao dịch thờigian thực |
 | **ClickHouse** | 8123 (HTTP), 9000 (Native) | Data Warehouse - Phân tích dữ liệu lớn |
 | **Redis** | 6379 | Buffer & Cache |
-| **Airflow** | 8085 | Workflow Scheduler |
-| **Superset** | 8088 | BI Dashboard |
-
----
-
-## 💻 Yêu cầu hệ thống
-
-### Tối thiểu:
-- **RAM**: 8GB
-- **Disk**: 20GB free
-- **Docker**: 24.0+
-- **Docker Compose**: 2.20+
-
-### Khuyến nghị:
-- **RAM**: 16GB+
-- **CPU**: 4 cores+
-- **Disk**: 50GB+ SSD
+| **Airflow** | 8085 / 30080 (K3s) | Workflow Scheduler |
+| **Superset** | 8088 / 30088 (K3s) | BI Dashboard |
 
 ---
 
 ## 🚀 Triển khai
 
-Triển khai tất cả services trên một máy duy nhất sử dụng Docker Compose.
+### Cách 1: Docker Compose (Dev/Test)
 
-### Bước 1: Vào thư mục docker
+> **Phù hợp**: Phát triển tính năng, test local, demo nhanh
+
+#### Yêu cầu hệ thống
+
+| Resource | Tối thiểu | Khuyến nghị |
+|----------|-----------|-------------|
+| RAM | 8GB | 16GB+ |
+| Disk | 20GB free | 50GB+ SSD |
+| Docker | 24.0+ | Latest |
+| Docker Compose | 2.20+ | Latest |
+
+#### Các bước triển khai
 
 ```bash
-cd retail_data_pipeline/docker
-```
+# 1. Vào thư mục docker
+cd docker
 
-### Bước 2: Copy file môi trường
-
-```bash
+# 2. Copy file môi trường
 cp .env.example .env
 # (Sửa các giá trị trong .env nếu cần)
-```
 
-### Bước 3: Khởi động hệ thống
+# 3. Khởi động hệ thống
+make up           # Infrastructure cơ bản
+make up-ml        # Hoặc: Kèm ML Pipeline
+make up-all       # Hoặc: Tất cả services
 
-```bash
-# Khởi động infrastructure (khuyến nghị)
-make up
-
-# Hoặc khởi động với ML Pipeline
-make up-ml
-
-# Hoặc khởi động tất cả services
-make up-all
-```
-
-**Services khởi động:**
-- Redis (Cache)
-- PostgreSQL (OLTP)
-- ClickHouse (Data Warehouse)
-- Airflow (Scheduler)
-- Superset (BI Dashboard)
-
-### Bước 4: Kiểm tra status
-
-```bash
+# 4. Kiểm tra status
 make status
 make health
 ```
 
-### Commands hữu ích
+#### Commands thường dùng (Docker)
 
 ```bash
+cd docker
+
 # Xem tất cả commands
 make help
-
-# Logs
-make logs              # Tất cả services
-make logs-ml-pipeline  # Service cụ thể
 
 # Data Pipeline
 make sync-to-ch        # Sync PostgreSQL → ClickHouse
@@ -152,24 +139,204 @@ make down-v            # Stop + remove volumes
 make clean             # Dọn Docker cache
 ```
 
+📖 **Xem chi tiết**: [docker/README.md](docker/README.md)
+
+---
+
+### Cách 2: K3s Cluster + GitHub Actions (Production)
+
+> **Phù hợp**: Deploy thực tế, production, auto-scaling, CI/CD tự động
+
+#### Kiến trúc triển khai
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    GitHub Repository                             │
+│  ┌─────────────┐    ┌──────────────────────────────────────┐   │
+│  │   Code      │───▶│  GitHub Actions                      │   │
+│  │   Push      │    │  ┌─────────────┐  ┌──────────────┐   │   │
+│  └─────────────┘    │  │ Build Images│─▶│ Push Docker  │   │   │
+│                     │  │ (3 images)  │  │ Hub          │   │   │
+│                     │  └─────────────┘  └──────────────┘   │   │
+│                     └──────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    K3s Cluster (Production)                      │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │           Self-Hosted Runner (on K3s node)               │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌────────────────┐   │    │
+│  │  │ Pull Images │  │Apply K8s    │  │ Update         │   │    │
+│  │  │ from Docker │  │Manifests    │  │ Deployments    │   │    │
+│  │  │ Hub         │  │             │  │                │   │    │
+│  │  └─────────────┘  └─────────────┘  └────────────────┘   │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                              │                                   │
+│         ┌────────────────────┼────────────────────┐              │
+│         ▼                    ▼                    ▼              │
+│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐        │
+│  │ PostgreSQL  │     │  DBT Jobs   │     │ ML Pipeline │        │
+│  │ ClickHouse  │     │  CronJobs   │     │  CronJobs   │        │
+│  │    Redis    │     │             │     │             │        │
+│  └─────────────┘     └─────────────┘     └─────────────┘        │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Yêu cầu hệ thống
+
+| Resource | Tối thiểu | Khuyến nghị |
+|----------|-----------|-------------|
+| OS | Ubuntu 20.04/22.04 LTS | Ubuntu 22.04 LTS |
+| RAM | 8GB | 16GB+ |
+| CPU | 4 cores | 8 cores+ |
+| Disk | 50GB SSD | 100GB+ SSD |
+| Network | Public IP | Static IP + Domain |
+
+#### Các bước triển khai
+
+**Bước 1: Cài đặt K3s trên server**
+
+```bash
+# Trên server Ubuntu
+curl -sfL https://get.k3s.io | sh -
+
+# Kiểm tra cài đặt
+sudo kubectl get nodes
+```
+
+**Bước 2: Cấu hình GitHub Secrets**
+
+Vào **GitHub Repository → Settings → Secrets and variables → Actions**, thêm:
+
+| Secret | Mô tả | Ví dụ |
+|--------|-------|-------|
+| `DOCKERHUB_USERNAME` | Username Docker Hub | `annduke128` |
+| `DOCKERHUB_TOKEN` | Access Token Docker Hub | `dckr_pat_xxx` |
+| `POSTGRES_PASSWORD` | Mật khẩu PostgreSQL | `secure_password` |
+| `CLICKHOUSE_PASSWORD` | Mật khẩu ClickHouse | `secure_password` |
+
+**Bước 3: Setup Self-Hosted Runner**
+
+```bash
+# Trên K3s server, chạy với quyền root
+cd /root
+
+# Download runner (thay YOUR_TOKEN bằng token từ GitHub)
+mkdir actions-runner && cd actions-runner
+curl -o actions-runner-linux-x64-2.311.0.tar.gz \
+  -L https://github.com/actions/runner/releases/download/v2.311.0/actions-runner-linux-x64-2.311.0.tar.gz
+tar xzf actions-runner-linux-x64-2.311.0.tar.gz
+
+# Cấu hình và chạy
+./config.sh --url https://github.com/YOUR_USERNAME/YOUR_REPO --token YOUR_TOKEN
+./run.sh
+```
+
+**Bước 4: Triển khai lần đầu**
+
+```bash
+# Từ repository local, push code lên main
+git add .
+git commit -m "Initial K3s deployment"
+git push origin main
+```
+
+GitHub Actions sẽ tự động:
+1. Build 3 Docker images: `hasu-ml-pipeline`, `hasu-dbt`, `hasu-sync-tool`
+2. Push lên Docker Hub
+3. Deploy lên K3s qua self-hosted runner
+
+**Bước 5: Chạy pipeline trên K3s**
+
+```bash
+# Từ local machine (có kubectl kết nối đến K3s)
+make app-k3s DOCKERHUB_USERNAME=yourusername
+
+# Hoặc chạy từng bước riêng lẻ
+make k3s-sync        # Chỉ chạy sync
+make k3s-dbt         # Chỉ chạy DBT
+make k3s-ml-train    # Chỉ train model
+make k3s-ml-predict  # Chỉ predict
+```
+
+#### Commands thường dùng (K3s)
+
+```bash
+# Kiểm tra status
+make k8s-status          # Xem tất cả resources
+kubectl get pods -n hasu-ml
+kubectl get jobs -n hasu-ml
+
+# Xem logs
+kubectl logs -n hasu-ml job/sync-data
+kubectl logs -n hasu-ml job/dbt-build
+kubectl logs -n hasu-ml job/ml-train
+
+# Port forward để truy cập local
+kubectl port-forward svc/airflow 8080:8080 -n hasu-ml
+kubectl port-forward svc/superset 8088:8088 -n hasu-ml
+```
+
+📖 **Xem chi tiết**: [k8s/README.md](k8s/README.md)
+
+---
+
+## 📊 So sánh 2 cách triển khai
+
+| Tiêu chí | Docker Compose | K3s + GitHub Actions |
+|----------|---------------|---------------------|
+| **Mục đích** | Dev/Test | Production |
+| **Độ phức tạp** | Thấp | Cao |
+| **CI/CD** | Manual | Tự động (GitHub Actions) |
+| **Scaling** | Vertical only | Horizontal + Vertical |
+| **High Availability** | Không | Có (multi-node) |
+| **Auto-restart** | Docker restart | Kubernetes self-healing |
+| **Resource Management** | Basic | Advanced (limits, quotas) |
+| **Monitoring** | Basic logs | Full K8s observability |
+| **SSL/TLS** | Manual | Cert-manager tự động |
+| **Backup** | Manual | Velero/PVC backup |
+
+### Khi nào dùng cái nào?
+
+**Dùng Docker Compose khi:**
+- 🔧 Đang phát triển tính năng mới
+- 🧪 Cần test nhanh trên local
+- 💻 Máy tính cá nhân, không có server riêng
+- 🎓 Học tập, demo, proof-of-concept
+
+**Dùng K3s khi:**
+- 🚀 Deploy production thực tế
+- 👥 Có nhiều user truy cập
+- 📈 Cần auto-scaling theo load
+- 🔄 Yêu cầu CI/CD tự động
+- 💼 Doanh nghiệp, có đội ngũ vận hành
+
 ---
 
 ## 🔍 Kiểm tra Healthcheck
 
+### Docker Compose
+
 ```bash
 cd docker
-
-# Kiểm tra tất cả services
 make health
-
-# Kiểm tra từng service
-make health-postgres
-make health-clickhouse
-make health-redis
-
-# Xem logs
 make logs
-make logs-ml-pipeline
+```
+
+### K3s
+
+```bash
+# Check all pods
+kubectl get pods -n hasu-ml
+
+# Check logs
+kubectl logs -f deployment/postgres -n hasu-ml
+kubectl logs -f deployment/clickhouse -n hasu-ml
+
+# Check events
+kubectl get events -n hasu-ml --sort-by='.lastTimestamp'
 ```
 
 ---
@@ -182,18 +349,17 @@ Hệ thống tự động import CSV **hàng ngày lúc 2h sáng** thông qua Ai
 
 ### Import thủ công
 
+**Docker:**
 ```bash
 cd docker
 make sync-to-ch
 ```
 
-### Copy file CSV
-
+**K3s:**
 ```bash
-# Copy file vào thư mục
-cp /path/to/your/file.csv csv_input/
-
-# File sẽ được tự động xử lý
+make k3s-sync
+# Hoặc
+kubectl apply -f k8s/05-ml-pipeline/job-sync.yaml -n hasu-ml
 ```
 
 ---
@@ -214,16 +380,20 @@ dbt_retail/
 
 ### Commands
 
+**Docker:**
 ```bash
 cd docker
-
 make dbt-deps           # Install dependencies
 make dbt-seed           # Load seeds
 make dbt-build          # Build all models
-make dbt-build-staging  # Build staging only
-make dbt-build-marts    # Build marts only
 make dbt-test           # Run tests
-make dbt-docs           # Generate & serve docs
+```
+
+**K3s:**
+```bash
+make k3s-dbt
+# Hoặc
+kubectl apply -f k8s/05-ml-pipeline/job-dbt-build.yaml -n hasu-ml
 ```
 
 **Native (không cần Docker):**
@@ -240,14 +410,19 @@ dbt build --select staging,marts
 
 ### Training với Optuna Tuning
 
+**Docker:**
 ```bash
 cd docker
-
 make ml                 # Train (50 trials)
 make ml-fast            # Train nhanh (no tuning)
 make ml-optimal         # Train tối ưu (100 trials)
 make ml-all             # Train + Predict + Email
-make ml-predict         # Generate predictions only
+```
+
+**K3s:**
+```bash
+make k3s-ml-train       # Train models
+make k3s-ml-predict     # Generate predictions
 ```
 
 ### Chi tiết Hyperparameter Tuning
@@ -261,38 +436,14 @@ make ml-predict         # Generate predictions only
 
 ---
 
-## ⚙️ Tùy chỉnh tham số
-
-### 1. Tham s trong dbt_project.yml
-
-```yaml
-vars:
-  min_date: '2020-01-01'
-  high_value_threshold: 1000000  # 1 triệu VND
-  abc_a_threshold: 0.8
-  abc_b_threshold: 0.95
-```
-
-### 2. Environment Variables
-
-Sửa trong `docker/.env`:
-
-```bash
-POSTGRES_USER=retail_user
-POSTGRES_PASSWORD=your_password
-CLICKHOUSE_PASSWORD=your_password
-EMAIL_SENDER=your-email@company.com
-```
-
----
-
 ## 📊 Kết nối Superset BI
 
 ### Truy cập UI
 
-- **URL:** http://localhost:8088
-- **Username:** `admin`
-- **Password:** `admin`
+| Môi trường | URL | Credentials |
+|------------|-----|-------------|
+| Docker | http://localhost:8088 | admin / admin |
+| K3s | http://node-ip:30088 | admin / admin |
 
 ### Database Connections
 
@@ -310,6 +461,8 @@ clickhouse+http://default:clickhouse_password@clickhouse:8123/retail_dw
 
 ## 🛠️ Troubleshooting
 
+### Docker Compose
+
 ```bash
 # Port đã được sử dụng
 sudo lsof -i :5432
@@ -324,43 +477,45 @@ make clean
 make disk
 ```
 
+### K3s
+
+```bash
+# Pod không start
+kubectl logs -f deployment/postgres -n hasu-ml
+kubectl get events -n hasu-ml --sort-by='.lastTimestamp'
+
+# PVC pending
+kubectl get pvc -n hasu-ml
+kubectl describe pvc <pvc-name> -n hasu-ml
+
+# Image pull failed
+kubectl get secret dockerhub-credentials -n hasu-ml
+# Re-apply secrets từ GitHub Actions hoặc manually
+```
+
 ---
 
 ## 📞 Commands Reference
 
-### Application Commands (Makefile gốc)
+### Root Makefile Commands
 
 ```bash
-# Development
-make install            # Install Python dependencies
-make test               # Run tests
-make format             # Format code
-make lint               # Lint code
+# Development (Docker)
+make app                # Run full pipeline locally
 
-# DBT (native)
-make dbt-deps           # Install DBT dependencies
-make dbt-build          # Build models
-make dbt-test           # Run tests
+# Production (K3s)
+make app-k3s            # Run full pipeline on K3s
+make k3s-sync           # Sync job only
+make k3s-dbt            # DBT build only
+make k3s-ml-train       # ML training only
+make k3s-ml-predict     # ML prediction only
 
-# ML (native)
-make ml                 # Train ML
-make ml-all             # Full ML pipeline
-```
-
-### Docker Commands (docker/Makefile)
-
-```bash
-cd docker
-
-make up                 # Start infrastructure
-make up-ml              # Start with ML
-make up-all             # Start all
-make down               # Stop services
-make build              # Build images
-
-make sync-to-ch         # Sync data
-make dbt-build          # Build DBT
-make ml-all             # Full ML pipeline
+# K8s Management
+make k8s-deploy         # Deploy/Update K3s resources
+make k8s-deploy-all     # Full deployment
+make k8s-status         # Check status
+make k8s-logs           # View logs
+make k8s-delete         # Delete all resources
 ```
 
 ---
@@ -395,11 +550,19 @@ Tự động gửi email cho các sự kiện:
 - ML Training Success/Failure
 - ML Prediction Success/Failure
 
-Cấu hình trong `docker/.env`:
-```bash
-EMAIL_SENDER=ml-pipeline@company.com
-EMAIL_PASSWORD=your-app-password
-```
+**Docker:** Cấu hình trong `docker/.env`
+**K3s:** Cấu hình trong GitHub Secrets (auto-inject vào K8s secrets)
+
+---
+
+## 📚 Tài liệu tham khảo
+
+| File | Mô tả |
+|------|-------|
+| [AGENTS.md](AGENTS.md) | Hướng dẫn cho AI coding agents |
+| [docker/README.md](docker/README.md) | Chi tiết Docker Compose |
+| [k8s/README.md](k8s/README.md) | Chi tiết K3s deployment |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Kiến trúc hệ thống chi tiết |
 
 ---
 
@@ -407,6 +570,4 @@ EMAIL_PASSWORD=your-app-password
 
 MIT License
 
-**Last Updated:** 2026-02-24
-# Test CI/CD
-# Test CI/CD
+**Last Updated:** 2026-03-03
