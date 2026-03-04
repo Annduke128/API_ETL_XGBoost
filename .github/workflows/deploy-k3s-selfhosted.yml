@@ -64,12 +64,22 @@ jobs:
             echo "🤖 Applying ML pipeline..."
             sudo k3s kubectl apply -f k8s/05-ml-pipeline/
             
-            echo "⏳ Waiting for databases to be ready..."
-            sudo k3s kubectl wait --for=condition=available --timeout=300s deployment/postgres -n hasu-ml || true
-            sudo k3s kubectl wait --for=condition=available --timeout=300s deployment/clickhouse -n hasu-ml || true
-            sudo k3s kubectl wait --for=condition=available --timeout=300s deployment/redis -n hasu-ml || true
+            echo "🔐 Creating secrets from environment variables..."
+            sudo k3s kubectl create secret generic hasu-ml-secrets -n hasu-ml \
+              --from-literal=POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD || 'postgres' }}" \
+              --from-literal=CLICKHOUSE_PASSWORD="${{ secrets.CLICKHOUSE_PASSWORD || 'clickhouse' }}" \
+              --from-literal=REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD || '' }}" \
+              --from-literal=AIRFLOW__CORE__FERNET_KEY="${{ secrets.AIRFLOW_FERNET_KEY || '' }}" \
+              --from-literal=SUPERSET_SECRET_KEY="${{ secrets.SUPERSET_SECRET_KEY || '' }}" \
+              --from-literal=EMAIL_PASSWORD="${{ secrets.EMAIL_PASSWORD || '' }}" \
+              --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+            
+            echo "⏳ Waiting for databases to be ready (this may take a few minutes)..."
+            sleep 10
+            sudo k3s kubectl get pods -n hasu-ml
             
             echo "✅ Infrastructure setup complete!"
+            echo "⚠️ Note: Pods may still be starting up. Check status with: sudo k3s kubectl get pods -n hasu-ml"
           else
             echo "✅ Infrastructure already exists, skipping initial setup..."
           fi
