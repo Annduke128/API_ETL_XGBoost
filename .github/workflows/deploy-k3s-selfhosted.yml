@@ -31,8 +31,8 @@ jobs:
       - name: Verify K3s Connection
         run: |
           echo "🔍 Verifying K3s connection..."
-          k3s kubectl cluster-info
-          k3s kubectl get nodes
+          sudo k3s kubectl cluster-info
+          sudo k3s kubectl get nodes
 
       - name: Deploy to K3s (Local)
         env:
@@ -52,32 +52,32 @@ jobs:
           
           # Update CronJobs
           echo "🔄 Updating CronJobs..."
-          k3s kubectl set image cronjob/ml-training ml-training=${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest -n hasu-ml
-          k3s kubectl set image cronjob/ml-predict ml-predict=${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest -n hasu-ml
-          k3s kubectl set image cronjob/dbt-daily dbt=${{ secrets.DOCKERHUB_USERNAME }}/hasu-dbt:latest -n hasu-ml
+          sudo k3s kubectl set image cronjob/ml-training ml-training=${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest -n hasu-ml
+          sudo k3s kubectl set image cronjob/ml-predict ml-predict=${{ secrets.DOCKERHUB_USERNAME }}/hasu-ml-pipeline:latest -n hasu-ml
+          sudo k3s kubectl set image cronjob/dbt-daily dbt=${{ secrets.DOCKERHUB_USERNAME }}/hasu-dbt:latest -n hasu-ml
           
           # Restart Deployments
           echo "🔄 Restarting Deployments..."
-          k3s kubectl rollout restart deployment/airflow-webserver -n hasu-ml || true
-          k3s kubectl rollout restart deployment/airflow-scheduler -n hasu-ml || true
-          k3s kubectl rollout restart deployment/superset -n hasu-ml || true
-          k3s kubectl rollout restart deployment/postgres -n hasu-ml || true
-          k3s kubectl rollout restart deployment/clickhouse -n hasu-ml || true
-          k3s kubectl rollout restart deployment/redis -n hasu-ml || true
+          sudo k3s kubectl rollout restart deployment/airflow-webserver -n hasu-ml || true
+          sudo k3s kubectl rollout restart deployment/airflow-scheduler -n hasu-ml || true
+          sudo k3s kubectl rollout restart deployment/superset -n hasu-ml || true
+          sudo k3s kubectl rollout restart deployment/postgres -n hasu-ml || true
+          sudo k3s kubectl rollout restart deployment/clickhouse -n hasu-ml || true
+          sudo k3s kubectl rollout restart deployment/redis -n hasu-ml || true
           
           # Wait for rollout
           echo "⏳ Waiting for rollouts..."
-          k3s kubectl rollout status deployment/airflow-webserver -n hasu-ml --timeout=300s || true
-          k3s kubectl rollout status deployment/airflow-scheduler -n hasu-ml --timeout=300s || true
-          k3s kubectl rollout status deployment/superset -n hasu-ml --timeout=300s || true
+          sudo k3s kubectl rollout status deployment/airflow-webserver -n hasu-ml --timeout=300s || true
+          sudo k3s kubectl rollout status deployment/airflow-scheduler -n hasu-ml --timeout=300s || true
+          sudo k3s kubectl rollout status deployment/superset -n hasu-ml --timeout=300s || true
           
           # Verify
           echo ""
           echo "=== Deployment Status ==="
-          k3s kubectl get deployments -n hasu-ml
+          sudo k3s kubectl get deployments -n hasu-ml
           echo ""
           echo "=== Pod Status ==="
-          k3s kubectl get pods -n hasu-ml
+          sudo k3s kubectl get pods -n hasu-ml
           
           # Cleanup
           echo "🧹 Cleaning up old images..."
