@@ -34,11 +34,45 @@ jobs:
           sudo k3s kubectl cluster-info
           sudo k3s kubectl get nodes
 
-      - name: Create Namespace if not exists
+      - name: Setup Infrastructure (First Time)
         run: |
           echo "📁 Checking namespace..."
           sudo k3s kubectl get namespace hasu-ml || sudo k3s kubectl create namespace hasu-ml
           echo "✅ Namespace hasu-ml ready"
+          
+          # Kiểm tra nếu cần apply lần đầu
+          echo "🔍 Checking if this is first deployment..."
+          if ! sudo k3s kubectl get deployment postgres -n hasu-ml &>/dev/null; then
+            echo "🚀 First deployment detected! Applying all manifests..."
+            
+            # Apply tất cả manifests theo thứ tự
+            echo "📦 Applying namespace and network policies..."
+            sudo k3s kubectl apply -f k8s/00-namespace/
+            
+            echo "💾 Applying storage..."
+            sudo k3s kubectl apply -f k8s/01-storage/
+            
+            echo "⚙️ Applying configmaps..."
+            sudo k3s kubectl apply -f k8s/02-config/configmap.yaml
+            
+            echo "🗄️ Applying databases..."
+            sudo k3s kubectl apply -f k8s/03-databases/
+            
+            echo "🌐 Applying applications (Airflow, Superset)..."
+            sudo k3s kubectl apply -f k8s/04-applications/
+            
+            echo "🤖 Applying ML pipeline..."
+            sudo k3s kubectl apply -f k8s/05-ml-pipeline/
+            
+            echo "⏳ Waiting for databases to be ready..."
+            sudo k3s kubectl wait --for=condition=available --timeout=300s deployment/postgres -n hasu-ml || true
+            sudo k3s kubectl wait --for=condition=available --timeout=300s deployment/clickhouse -n hasu-ml || true
+            sudo k3s kubectl wait --for=condition=available --timeout=300s deployment/redis -n hasu-ml || true
+            
+            echo "✅ Infrastructure setup complete!"
+          else
+            echo "✅ Infrastructure already exists, skipping initial setup..."
+          fi
 
       - name: Deploy to K3s (Local)
         env:
