@@ -34,6 +34,12 @@ jobs:
           sudo k3s kubectl cluster-info
           sudo k3s kubectl get nodes
 
+      - name: Create Namespace if not exists
+        run: |
+          echo "📁 Checking namespace..."
+          sudo k3s kubectl get namespace hasu-ml || sudo k3s kubectl create namespace hasu-ml
+          echo "✅ Namespace hasu-ml ready"
+
       - name: Deploy to K3s (Local)
         env:
           DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
