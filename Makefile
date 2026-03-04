@@ -10,6 +10,7 @@
         dbt-preview dbt-show-source dbt-show-model dbt-validate dbt-test-model dbt-compile \
         ml ml-train ml-predict ml-all ml-fast ml-optimal ml-report \
         pipeline-full pipeline-quick app \
+        k8s-deploy k8s-deploy-all k8s-update k8s-status k8s-logs k8s-delete \
         format lint check
 
 PYTHON := python3
@@ -52,6 +53,12 @@ help:
 	@echo "║    make format          - Format code (black, isort)             ║"
 	@echo "║    make lint            - Lint code (flake8, pylint)             ║"
 	@echo "║    make check           - Run all checks                         ║"
+	@echo "║                                                                  ║"
+	@echo "║  KUBERNETES / K3S                                                ║"
+	@echo "║    make k8s-deploy      - Update images & restart on K3s         ║"
+	@echo "║    make k8s-deploy-all  - Full deploy all manifests to K3s       ║"
+	@echo "║    make k8s-status      - Check K3s deployment status            ║"
+	@echo "║    make app-k3s         - Alias for k8s-deploy                   ║"
 	@echo "║                                                                  ║"
 	@echo "║  DOCKER                                                          ║"
 	@echo "║    cd docker && make help    - Docker commands                   ║"
@@ -261,3 +268,81 @@ app: pipeline-full ml-all
 	@echo "║     4. 🤖 ML Training                                                ║"
 	@echo "║     5. 🔮 Predictions                                                ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+
+# ============================================================================
+# KUBERNETES / K3S COMMANDS
+# ============================================================================
+
+K8S_DIR := k8s
+NAMESPACE := hasu-ml
+KUBECTL := kubectl
+
+# Check if running on K3s
+ifeq ($(shell which k3s 2>/dev/null),)
+    KUBECTL_CMD := $(KUBECTL)
+else
+    KUBECTL_CMD := k3s kubectl
+endif
+
+# Check if kubectl is available
+kubectl-check:
+	@which $(KUBECTL) > /dev/null 2>&1 || (echo "❌ kubectl not found. Please install kubectl or k3s." && exit 1)
+
+k8s-deploy: kubectl-check
+	@echo "🚀 Deploying/updating application on K3s..."
+	@echo "📦 Updating images and restarting deployments..."
+	$(KUBECTL_CMD) set image cronjob/ml-training ml-training=$${DOCKERHUB_USERNAME:-localhost}/hasu-ml-pipeline:latest -n $(NAMESPACE) 2>/dev/null || true
+	$(KUBECTL_CMD) set image cronjob/ml-predict ml-predict=$${DOCKERHUB_USERNAME:-localhost}/hasu-ml-pipeline:latest -n $(NAMESPACE) 2>/dev/null || true
+	$(KUBECTL_CMD) set image cronjob/dbt-daily dbt=$${DOCKERHUB_USERNAME:-localhost}/hasu-dbt:latest -n $(NAMESPACE) 2>/dev/null || true
+	$(KUBECTL_CMD) rollout restart deployment/airflow-webserver -n $(NAMESPACE) 2>/dev/null || true
+	$(KUBECTL_CMD) rollout restart deployment/airflow-scheduler -n $(NAMESPACE) 2>/dev/null || true
+	$(KUBECTL_CMD) rollout restart deployment/superset -n $(NAMESPACE) 2>/dev/null || true
+	@echo "✅ Deployment update triggered!"
+	@echo "⏳ Check status with: make k8s-status"
+
+k8s-deploy-all: kubectl-check
+	@echo "🚀 Full deployment to K3s..."
+	@echo "📁 Creating namespace..."
+	$(KUBECTL_CMD) create namespace $(NAMESPACE) 2>/dev/null || echo "Namespace already exists"
+	@echo "📦 Applying all manifests..."
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/00-namespace/
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/01-storage/
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/02-config/
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/03-databases/
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/04-applications/
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/05-ml-pipeline/
+	@echo "✅ All resources applied!"
+	@echo "⏳ Waiting for pods to start..."
+	sleep 5
+	$(KUBECTL_CMD) get pods -n $(NAMESPACE)
+
+k8s-update: k8s-deploy
+
+k8s-status: kubectl-check
+	@echo "📊 K3s Deployment Status"
+	@echo "========================"
+	@echo ""
+	@echo "📦 Deployments:"
+	$(KUBECTL_CMD) get deployments -n $(NAMESPACE)
+	@echo ""
+	@echo "🔄 CronJobs:"
+	$(KUBECTL_CMD) get cronjobs -n $(NAMESPACE)
+	@echo ""
+	@echo "🟢 Pods:"
+	$(KUBECTL_CMD) get pods -n $(NAMESPACE)
+
+k8s-logs: kubectl-check
+	@echo "📜 Recent logs from all pods..."
+	$(KUBECTL_CMD) logs --tail=50 -n $(NAMESPACE) -l app=ml-pipeline 2>/dev/null || echo "No ml-pipeline pods found"
+
+k8s-delete: kubectl-check
+	@echo "⚠️  WARNING: This will delete all resources in namespace $(NAMESPACE)"
+	@read -p "Are you sure? (yes/no): " confirm && [ "$$confirm" = "yes" ] || (echo "Cancelled." && exit 1)
+	$(KUBECTL_CMD) delete namespace $(NAMESPACE)
+	@echo "✅ Namespace deleted"
+
+# Aliases
+app-k3s: k8s-deploy
+k3s-deploy: k8s-deploy
+k3s-status: k8s-status
+
