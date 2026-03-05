@@ -54,13 +54,8 @@ poetry.lock
 # ============================================================================
 # DATA FILES (Không commit dữ liệu thô và kết quả)
 # ============================================================================
-# CSV input/output (dữ liệu lớn, không nên commit)
-csv_input/*.csv
-csv_input/processed/
-csv_input/error/
-csv_output/
-!csv_input/.gitkeep
-!csv_output/.gitkeep
+# Lưu ý: csv_input và csv_output đã được bỏ ignore để push code mẫu
+# Nếu có file CSV lớn (>10MB), nên dùng Git LFS hoặc không commit
 
 # Data directories
 data/
@@ -164,6 +159,7 @@ ml_pipeline/email_config.yaml
 # Database credentials
 config/database_credentials.yml
 config/secrets.yml
+k8s/02-config/secrets.yaml
 
 # SSL/TLS certificates
 *.pem
@@ -226,8 +222,7 @@ temp/
 !README.md
 !PIPELINE_MAP.md
 
-# CSV files in csv_input (except sample files)
-csv_input/*.csv
+# Các file CSV edge cases cụ thể (nếu cần ignore)
 edge_cases_inventory.csv
 product_edge_cases_inventory.csv
 
