@@ -120,17 +120,42 @@ GitHub Actions sẽ tự động:
 2. Push lên Docker Hub
 3. Deploy lên K3s qua self-hosted runner
 
-### Bước 5: Chạy pipeline trên K3s
+### Bước 5: Copy CSV files vào K3s (Quan trọng!)
+
+Pipeline cần dữ liệu CSV để xử lý. Copy files từ local vào K3s PVC:
 
 ```bash
-# Chạy full pipeline
+# Cách 1: Dùng Makefile helper
+make k3s-copy-csv
+
+# Cách 2: Manual copy (nếu cần)
+# Tạo temporary pod để copy
+kubectl run csv-uploader -n hasu-ml --image=busybox:1.36 --restart=Never -- sleep 300
+
+# Copy files
+kubectl cp csv_input/. hasu-ml/csv-uploader:/csv_input/
+
+# Xóa pod
+kubectl delete pod csv-uploader -n hasu-ml --force
+```
+
+### Bước 6: Chạy pipeline trên K3s
+
+```bash
+# Chạy full pipeline (CSV → PostgreSQL → ClickHouse → DBT → ML)
 make app-k3s DOCKERHUB_USERNAME=yourusername
 
-# Hoặc chạy từng bước riêng lẻ
-make k3s-sync        # Chỉ chạy sync
-make k3s-dbt         # Chỉ chạy DBT
-make k3s-ml-train    # Chỉ train model
-make k3s-ml-predict  # Chỉ predict
+# Hoặc chạy từng bước riêng lẻ để debug
+make k3s-csv         # Step 1: Xử lý CSV → PostgreSQL
+make k3s-sync        # Step 2: Sync PostgreSQL → ClickHouse
+make k3s-dbt         # Step 3: Chạy DBT models
+make k3s-ml-train    # Step 4: Train ML models
+make k3s-ml-predict  # Step 5: Generate predictions
+```
+
+**Flow đúng của pipeline:**
+```
+CSV Input → [csv-process Job] → PostgreSQL → [sync Job] → ClickHouse → [dbt Job] → Marts → [ml Jobs]
 ```
 
 ---
@@ -238,6 +263,33 @@ kubectl get events -n hasu-ml --sort-by='.lastTimestamp'
 
 # Describe pod
 kubectl describe pod <pod-name> -n hasu-ml
+```
+
+### CSV processing không có dữ liệu
+
+Nếu job `csv-process` chạy nhưng không xử lý được file nào:
+
+```bash
+# Kiểm tra CSV files trong PVC
+kubectl exec -n hasu-ml deployment/postgres -- ls -la /csv_input
+
+# Nếu trống, cần copy CSV vào
+make k3s-copy-csv
+
+# Xem logs job csv-process
+kubectl logs -n hasu-ml job/csv-process
+```
+
+### Sync không có dữ liệu
+
+Nếu `sync-data` chạy nhưng không sync được gì:
+
+```bash
+# Kiểm tra PostgreSQL có dữ liệu không
+kubectl exec -n hasu-ml deployment/postgres -- psql -U retail_user -d retail_db -c "SELECT COUNT(*) FROM transactions;"
+
+# Nếu = 0, chạy lại csv-process trước
+make k3s-csv
 ```
 
 ### PVC pending

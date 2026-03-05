@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sync-data
+  name: csv-process
   namespace: hasu-ml
 spec:
   template:
@@ -10,12 +10,15 @@ spec:
       initContainers:
       - name: wait-for-postgres
         image: busybox:1.36
-        command: ['sh', '-c', 'until nc -z postgres 5432 && nc -z clickhouse 9000; do echo waiting for databases...; sleep 2; done;']
+        command: ['sh', '-c', 'until nc -z postgres 5432; do echo waiting for postgres...; sleep 2; done;']
+      - name: wait-for-redis
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z redis 6379; do echo waiting for redis...; sleep 2; done;']
       containers:
-      - name: sync
+      - name: csv-processor
         image: ${DOCKERHUB_USERNAME}/hasu-sync-tool:latest
         imagePullPolicy: Always
-        command: ["python", "sync_to_clickhouse.py"]
+        command: ["python", "auto_process_files.py", "--input", "/csv_input", "--output", "/csv_output"]
         envFrom:
         - configMapRef:
             name: hasu-ml-config

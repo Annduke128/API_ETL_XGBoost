@@ -56,12 +56,13 @@ help:
 	@echo "║                                                                  ║"
 	@echo "║  KUBERNETES / K3S                                                ║"
 	@echo "║    make app-k3s         - 🚀 Run FULL pipeline on K3s            ║"
+	@echo "║    make k3s-csv         - Process CSV files on K3s               ║"
 	@echo "║    make k3s-sync        - Run Sync job on K3s                    ║"
 	@echo "║    make k3s-dbt         - Run DBT build on K3s                   ║"
 	@echo "║    make k3s-ml-train    - Run ML training on K3s                 ║"
 	@echo "║    make k3s-ml-predict  - Run ML predictions on K3s              ║"
-	@echo "║    make k3s-deploy      - Update images & restart deployments    ║"
-	@echo "║    make k3s-status      - Check K3s status                       ║"
+	@echo "║    make k8s-deploy-all  - Deploy all K3s resources               ║"
+	@echo "║    make k8s-status      - Check K3s status                       ║"
 	@echo "║                                                                  ║"
 	@echo "║  DOCKER                                                          ║"
 	@echo "║    cd docker && make help    - Docker commands                   ║"
@@ -321,8 +322,12 @@ k8s-deploy-all: kubectl-check
 	done
 	@echo "✅ All resources applied!"
 	@echo "⏳ Waiting for pods to start..."
-	sleep 5
+	sleep 10
 	$(KUBECTL_CMD) get pods -n $(NAMESPACE)
+	@echo ""
+	@echo "📋 Next steps:"
+	@echo "  1. Copy CSV files to PVC: kubectl cp csv_input/. $(NAMESPACE)/<pod>:/csv_input/"
+	@echo "  2. Run pipeline: make app-k3s DOCKERHUB_USERNAME=$(DOCKERHUB_USERNAME)"
 
 k8s-update: k8s-deploy
 
@@ -377,28 +382,35 @@ app-k3s: kubectl-check
 	@sleep 2
 	
 	@echo ""
-	@echo "📥 Step 1: Sync PostgreSQL → ClickHouse"
+	@echo "📄 Step 1: Process CSV Files → PostgreSQL"
+	@cat $(K8S_DIR)/05-ml-pipeline/job-csv-process.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@echo "⏳ Waiting for CSV processing to complete..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/csv-process -n $(NAMESPACE) --timeout=600s
+	@echo "✅ CSV processing complete!"
+	
+	@echo ""
+	@echo "📥 Step 2: Sync PostgreSQL → ClickHouse"
 	@cat $(K8S_DIR)/05-ml-pipeline/job-sync.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
 	@echo "⏳ Waiting for sync to complete..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/sync-data -n $(NAMESPACE) --timeout=600s
 	@echo "✅ Sync complete!"
 	
 	@echo ""
-	@echo "🏗️ Step 2: DBT Build"
+	@echo "🏗️ Step 3: DBT Build"
 	@cat $(K8S_DIR)/05-ml-pipeline/job-dbt-build.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
 	@echo "⏳ Waiting for DBT to complete..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/dbt-build -n $(NAMESPACE) --timeout=900s
 	@echo "✅ DBT build complete!"
 	
 	@echo ""
-	@echo "🤖 Step 3: ML Training"
+	@echo "🤖 Step 4: ML Training"
 	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
 	@echo "⏳ Waiting for training to complete (this may take 15-30 minutes)..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train -n $(NAMESPACE) --timeout=3600s
 	@echo "✅ ML training complete!"
 	
 	@echo ""
-	@echo "🔮 Step 4: Generate Predictions"
+	@echo "🔮 Step 5: Generate Predictions"
 	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
 	@echo "⏳ Waiting for predictions..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/ml-predict -n $(NAMESPACE) --timeout=600s
@@ -412,6 +424,14 @@ app-k3s: kubectl-check
 	@echo "Check results: make k3s-logs"
 
 # Individual pipeline steps on K3s
+k3s-csv: kubectl-check
+	@echo "📄 Running CSV Processing on K3s..."
+	-$(KUBECTL_CMD) delete job csv-process -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
+	@cat $(K8S_DIR)/05-ml-pipeline/job-csv-process.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	$(KUBECTL_CMD) wait --for=condition=complete job/csv-process -n $(NAMESPACE) --timeout=600s
+	@echo "✅ CSV processing complete!"
+
 k3s-sync: kubectl-check
 	@echo "📥 Running Sync on K3s..."
 	-$(KUBECTL_CMD) delete job sync-data -n $(NAMESPACE) 2>/dev/null || true
@@ -443,6 +463,20 @@ k3s-ml-predict: kubectl-check
 	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
 	$(KUBECTL_CMD) wait --for=condition=complete job/ml-predict -n $(NAMESPACE) --timeout=600s
 	@echo "✅ Predictions complete!"
+
+# Copy CSV files to K3s PVC
+k3s-copy-csv: kubectl-check
+	@echo "📁 Copying CSV files to K3s..."
+	@echo "Creating temporary pod to access PVC..."
+	@$(KUBECTL_CMD) run csv-uploader -n $(NAMESPACE) --image=busybox:1.36 --restart=Never -- sleep 300 2>/dev/null || true
+	@sleep 3
+	@echo "Copying files from csv_input/ to K3s..."
+	@$(KUBECTL_CMD) cp csv_input/. $(NAMESPACE)/csv-uploader:/tmp/csv_input/ 2>/dev/null || echo "⚠️  Copy may have failed, continuing..."
+	@$(KUBECTL_CMD) exec -n $(NAMESPACE) csv-uploader -- sh -c 'mkdir -p /csv_input && cp -r /tmp/csv_input/* /csv_input/ 2>/dev/null; ls -la /csv_input/' || true
+	@$(KUBECTL_CMD) delete pod csv-uploader -n $(NAMESPACE) --force 2>/dev/null || true
+	@echo "✅ CSV files copied!"
+	@echo ""
+	@echo "To verify, run: kubectl exec -n $(NAMESPACE) deployment/postgres -- ls -la /csv_input"
 
 # Deploy commands
 k3s-deploy: kubectl-check
