@@ -26,9 +26,9 @@ daily_movement AS (
         
         -- Xuất hàng (bán ra)
         SUM(td.quantity) AS units_sold,
-        SUM(toFloat64(td.line_revenue)) AS revenue,
-        SUM(toFloat64(td.line_cost)) AS cogs,
-        SUM(toFloat64(td.line_profit)) AS profit,
+        SUM(td.line_revenue) AS revenue,
+        SUM(td.line_cost) AS cogs,
+        SUM(td.line_profit) AS profit,
         
         COUNT(DISTINCT td.transaction_id) AS transaction_count
         

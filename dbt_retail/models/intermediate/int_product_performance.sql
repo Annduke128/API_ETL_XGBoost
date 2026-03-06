@@ -34,17 +34,17 @@ product_metrics AS (
         -- Tổng số liệu
         COUNT(DISTINCT transaction_id) AS total_transactions,
         SUM(quantity) AS total_quantity_sold,
-        SUM(toFloat64(line_revenue)) AS total_revenue,
-        SUM(toFloat64(line_profit)) AS total_profit,
+        SUM(line_revenue) AS total_revenue,
+        SUM(line_profit) AS total_profit,
         
         -- Giá trị trung bình
-        AVG(toFloat64(selling_price)) AS avg_selling_price,
-        AVG(toFloat64(line_profit)) AS avg_profit_per_unit,
+        AVG(selling_price) AS avg_selling_price,
+        AVG(line_profit) AS avg_profit_per_unit,
         
         -- Biên lợi nhuận
         CASE 
-            WHEN SUM(toFloat64(line_revenue)) > 0 
-            THEN SUM(toFloat64(line_profit)) / SUM(toFloat64(line_revenue)) 
+            WHEN SUM(line_revenue)) > 0 
+            THEN SUM(line_profit)) / SUM(line_revenue)) 
             ELSE 0 
         END AS profit_margin,
         
@@ -63,7 +63,7 @@ abc_classification AS (
     SELECT
         *,
         SUM(total_revenue) OVER (ORDER BY total_revenue DESC) 
-            / SUM(total_revenue) OVER () AS revenue_cum_pct,
+            / SUM(total_revenue) OVER ( AS revenue_cum_pct,
         
         -- Phân loại ABC
         CASE 
