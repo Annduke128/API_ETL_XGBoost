@@ -36,8 +36,8 @@ peak_days_actual AS (
         AVG(f.gross_revenue) AS actual_avg_revenue,
         AVG(f.quantity_sold) AS actual_avg_quantity,
         COUNT(DISTINCT f.transaction_date) AS num_peak_days,
-        -- Xác định loại ngày phổ biến nhất trong nhóm peak days
-        mode(CASE 
+        -- Xác định loại ngày phổ biến nhất trong nhóm peak days (simplified)
+        any(CASE 
             WHEN toDayOfWeek(f.transaction_date) IN (6, 7) THEN 'weekend'
             ELSE 'weekday'
         END) AS dominant_day_type
