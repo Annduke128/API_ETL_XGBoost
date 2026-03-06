@@ -34,12 +34,12 @@ product_metrics AS (
         -- Tổng số liệu
         COUNT(DISTINCT transaction_id) AS total_transactions,
         SUM(quantity) AS total_quantity_sold,
-        SUM(line_revenue) AS total_revenue,
-        SUM(line_profit) AS total_profit,
+        SUM(toFloat64(line_revenue)) AS total_revenue,
+        SUM(toFloat64(line_profit)) AS total_profit,
         
         -- Giá trị trung bình
-        AVG(selling_price) AS avg_selling_price,
-        AVG(line_profit) AS avg_profit_per_unit,
+        AVG(toFloat64(selling_price)) AS avg_selling_price,
+        AVG(toFloat64(line_profit)) AS avg_profit_per_unit,
         
         -- Biên lợi nhuận
         CASE 

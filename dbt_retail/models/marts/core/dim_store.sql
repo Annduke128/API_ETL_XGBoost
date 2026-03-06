@@ -71,10 +71,10 @@ store_enriched AS (
         s.city,
         
         -- Default values cho các cột khác
-        NULL as store_area_m2,
-        NULL as selling_area_m2,
-        NULL as storage_area_m2,
-        NULL as open_date,
+        toInt32(0) as store_area_m2,
+        toInt32(0) as selling_area_m2,
+        toInt32(0) as storage_area_m2,
+        toDate('2000-01-01') as open_date,
         'active' as status,
         
         now() as created_at,
