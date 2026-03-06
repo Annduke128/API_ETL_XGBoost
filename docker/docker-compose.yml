@@ -418,12 +418,9 @@ services:
         reservations:
           memory: 2G
 
-  # Spark ETL Job Runner
+  # Spark ETL Job Runner (Local Dev Mode - không cần build Scala)
   spark-etl:
-    build:
-      context: ../spark-etl
-      dockerfile: Dockerfile
-    image: retail-spark-etl:latest
+    image: docker.io/bitnami/spark:latest
     container_name: retail_spark_etl
     environment:
       - SPARK_MASTER=spark://spark-master:7077
@@ -443,15 +440,44 @@ services:
     volumes:
       - spark_shared:/shared
       - ../csv_input:/csv_input:ro
+      - ../data_cleaning:/app:ro
+    working_dir: /opt/spark
+    command: ["tail", "-f", "/dev/null"]  # Giữ container chạy để exec vào
     depends_on:
       - spark-master
-      - spark-worker
       - postgres
       - clickhouse
     networks:
       - retail_network
     profiles:
       - spark-etl
+
+  # ============================================
+  # Inventory Import Tool (Local Testing)
+  # ============================================
+  inventory-import:
+    build:
+      context: ./data_cleaning
+      dockerfile: Dockerfile
+    image: retail-sync-tool:latest
+    container_name: retail_inventory_import
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: retail_db
+      POSTGRES_USER: retail_user
+      POSTGRES_PASSWORD: retail_password
+    volumes:
+      - ../csv_input:/csv_input:ro
+      - ../data_cleaning:/app:ro
+    working_dir: /app
+    command: ["python", "import_inventory.py", "/csv_input/BaoCaoXuatNhapTon_KV06032026-102339-079.xlsx"]
+    depends_on:
+      - postgres
+    networks:
+      - retail_network
+    profiles:
+      - inventory
 
 volumes:
   redis_data:

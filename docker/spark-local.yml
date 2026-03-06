@@ -1,0 +1,43 @@
+# Docker Compose cho Spark Local Testing
+# Sử dụng: docker-compose -f spark-local.yml up -d
+
+version: '3.8'
+
+services:
+  spark-master:
+    image: docker.io/bitnami/spark:latest
+    container_name: spark_master_local
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+      - POSTGRES_HOST=host.docker.internal
+      - POSTGRES_DB=retail_db
+      - POSTGRES_USER=retail_user
+      - POSTGRES_PASSWORD=retail_password
+      - CLICKHOUSE_HOST=host.docker.internal
+      - CLICKHOUSE_DB=retail_dw
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=clickhouse_password
+    ports:
+      - "8090:8080"
+      - "7077:7077"
+    networks:
+      - spark_local
+
+  spark-worker:
+    image: docker.io/bitnami/spark:latest
+    container_name: spark_worker_local
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_CORES=2
+    depends_on:
+      - spark-master
+    networks:
+      - spark_local
+
+networks:
+  spark_local:
+    driver: bridge

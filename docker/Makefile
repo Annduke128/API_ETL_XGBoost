@@ -76,6 +76,11 @@ help:
 	@echo "║    make spark-status    - Check Spark status                     ║"
 	@echo "║    make spark-down      - Stop Spark cluster                     ║"
 	@echo "║                                                                  ║"
+	@echo "║  INVENTORY (Local Test)                                          ║"
+	@echo "║    make inventory-import   - Import Excel tồn kho                ║"
+	@echo "║    make inventory-check    - Kiểm tra dữ liệu tồn kho            ║"
+	@echo "║    make inventory-products-check - Check matching với products   ║"
+	@echo "║                                                                  ║"
 	@echo "║  DATABASE CLI                                                    ║"
 	@echo "║    make psql            - Connect to PostgreSQL                  ║"
 	@echo "║    make clickhouse      - Connect to ClickHouse                  ║"
@@ -423,6 +428,24 @@ pipeline-spark: spark-etl dbt-build
 	@echo "╔══════════════════════════════════════════════════════════════╗"
 	@echo "║     ✅ SPARK HYBRID PIPELINE COMPLETED SUCCESSFULLY          ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
+
+# ============================================================================
+# INVENTORY IMPORT (Local Testing)
+# ============================================================================
+
+inventory-import:
+	@echo "📦 Importing inventory from Excel..."
+	docker-compose -f $(COMPOSE_FILE) --profile inventory run --rm inventory-import
+
+inventory-check:
+	@echo "🔍 Checking inventory data..."
+	@docker-compose -f $(COMPOSE_FILE) exec -T postgres psql -U retail_user -d retail_db -c \
+		"SELECT ngay_bao_cao, chi_nhanh, COUNT(*) as so_san_pham, SUM(ton_cuoi_ky) as tong_ton FROM inventory_transactions GROUP BY ngay_bao_cao, chi_nhanh;"
+
+inventory-products-check:
+	@echo "🔍 Checking inventory vs products matching..."
+	@docker-compose -f $(COMPOSE_FILE) exec -T postgres psql -U retail_user -d retail_db -c \
+		"SELECT COUNT(*) as total, SUM(CASE WHEN p.id IS NOT NULL THEN 1 ELSE 0 END) as matched FROM inventory_transactions i LEFT JOIN products p ON i.ma_vach = p.ma_vach;"
 
 # ============================================================================
 # DATABASE CLI
