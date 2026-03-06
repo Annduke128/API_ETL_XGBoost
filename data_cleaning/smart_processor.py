@@ -209,7 +209,7 @@ def run_processor(processor_name, file_path=None, extra_args=None, working_dir='
     
     if use_spark and 'spark' in processor_name:
         # Mount spark-etl scripts vào container và chạy trực tiếp
-        spark_script = f'/app/spark_etl/{processor_name}'
+        spark_script = f'/spark_etl/{processor_name}'
         cmd = ['python', spark_script]
         if file_path:
             cmd.append(str(file_path))

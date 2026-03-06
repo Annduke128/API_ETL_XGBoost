@@ -380,7 +380,7 @@ services:
       - ../csv_input:/csv_input
       - ../csv_output:/csv_output
       - ../data_cleaning:/app:ro  # Mount code for development
-      - ../spark-etl/python_etl:/app/spark_etl:ro  # Mount PySpark scripts
+      - ../spark-etl/python_etl:/spark_etl:ro  # Mount PySpark scripts
     depends_on:
       - redis
       - postgres
