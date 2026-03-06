@@ -428,23 +428,23 @@ ml: ml-train
 
 ml-train:
 	@echo "🤖 Training ML models with Optuna tuning (50 trials)..."
-	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline python train_models.py --trials 50
+	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline train_models.py --trials 50
 
 ml-fast:
 	@echo "⚡ Training ML models (no tuning)..."
-	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline python train_models.py --no-tuning
+	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline train_models.py --no-tuning
 
 ml-optimal:
 	@echo "🎯 Training ML models with 100 trials..."
-	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline python train_models.py --trials 100
+	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline train_models.py --trials 100
 
 ml-all:
 	@echo "🚀 Training + Predicting + Email report..."
-	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline python xgboost_forecast.py --mode all --trials 30
+	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline xgboost_forecast.py --mode all --trials 30
 
 ml-predict:
 	@echo "📈 Generating predictions..."
-	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline python -c \
+	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline -c \
 		"from xgboost_forecast import SalesForecaster; f = SalesForecaster(); p = f.predict_next_week(); f.save_forecasts(p)"
 
 # ============================================================================
