@@ -43,8 +43,8 @@ product_metrics AS (
         
         -- Biên lợi nhuận
         CASE 
-            WHEN SUM(line_revenue)) > 0 
-            THEN SUM(line_profit)) / SUM(line_revenue)) 
+            WHEN SUM(line_revenue) > 0 
+            THEN SUM(line_profit) / SUM(line_revenue) 
             ELSE 0 
         END AS profit_margin,
         
@@ -63,7 +63,7 @@ abc_classification AS (
     SELECT
         *,
         SUM(total_revenue) OVER (ORDER BY total_revenue DESC) 
-            / SUM(total_revenue) OVER ( AS revenue_cum_pct,
+            / SUM(total_revenue) OVER () AS revenue_cum_pct,
         
         -- Phân loại ABC
         CASE 
