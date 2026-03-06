@@ -12,16 +12,6 @@
 -- Dùng để train ML model riêng cho promotion demand prediction
 -- Các sản phẩm này có pattern khác biệt so với baseline
 
-WITH promotion_products AS (
-    SELECT 
-        product_code,
-        category_level_1 AS promotion_category,
-        category_level_2 AS promotion_subcategory
-    FROM {{ ref('dim_product') }}
-    WHERE lower(category_level_1) LIKE '%khuyến mại%' 
-       OR lower(category_level_1) LIKE '%khuyen mai%'
-)
-
 SELECT 
     f.transaction_date,
     f.date_key,
@@ -40,12 +30,15 @@ SELECT
     f.etl_timestamp,
     
     -- Promotion metadata
-    p.promotion_category,
-    p.promotion_subcategory,
+    p.category_level_1 AS promotion_category,
+    p.category_level_2 AS promotion_subcategory,
     
     -- Flag cho ML
     1 AS is_promotional_sale,
     'promotional' AS sale_type
 
 FROM {{ ref('fct_daily_sales') }} f
-INNER JOIN promotion_products p ON f.product_code = p.product_code
+INNER JOIN {{ ref('dim_product') }} p 
+    ON f.product_code = p.product_code
+WHERE lower(p.category_level_1) LIKE '%khuyến mại%' 
+   OR lower(p.category_level_1) LIKE '%khuyen mai%'

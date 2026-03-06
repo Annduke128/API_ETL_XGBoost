@@ -34,9 +34,8 @@ SELECT
     'regular' AS sale_type
 
 FROM {{ ref('fct_daily_sales') }} f
-WHERE f.product_code NOT IN (
-    SELECT product_code 
-    FROM {{ ref('dim_product') }} 
-    WHERE lower(category_level_1) LIKE '%khuyến mại%' 
-       OR lower(category_level_1) LIKE '%khuyen mai%'
-)
+LEFT JOIN {{ ref('dim_product') }} p 
+    ON f.product_code = p.product_code
+WHERE p.product_code IS NULL 
+   OR (lower(p.category_level_1) NOT LIKE '%khuyến mại%' 
+       AND lower(p.category_level_1) NOT LIKE '%khuyen mai%')

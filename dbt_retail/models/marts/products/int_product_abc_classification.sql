@@ -32,7 +32,7 @@ WITH product_revenue AS (
         COALESCE(SUM(f.gross_revenue), 0) as total_revenue,
         COALESCE(SUM(f.quantity_sold), 0) as total_quantity,
         COUNT(DISTINCT f.transaction_date) as active_days
-    FROM {{ source('retail_source', 'staging_products') }} p
+    FROM {{ ref('stg_products') }} p
     LEFT JOIN {{ ref('fct_daily_sales') }} f 
         ON p.product_code = f.product_code
     GROUP BY 
