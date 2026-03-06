@@ -1,0 +1,27 @@
+# Spark checkpoint directory
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spark-checkpoint-pvc
+  namespace: spark
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: local-storage
+  resources:
+    requests:
+      storage: 20Gi
+---
+# Shared volume for data exchange between Spark and Python
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spark-shared-pvc
+  namespace: spark
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: local-storage
+  resources:
+    requests:
+      storage: 50Gi

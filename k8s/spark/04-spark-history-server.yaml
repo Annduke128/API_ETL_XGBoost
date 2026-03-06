@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-history-server
+  namespace: spark
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-history-server
+  template:
+    metadata:
+      labels:
+        app: spark-history-server
+    spec:
+      containers:
+      - name: spark-history-server
+        image: bitnami/spark:3.5.0
+        command:
+        - /opt/bitnami/spark/sbin/start-history-server.sh
+        env:
+        - name: SPARK_HISTORY_OPTS
+          value: "-Dspark.history.ui.port=18080 -Dspark.history.fs.logDirectory=/tmp/spark-events"
+        ports:
+        - containerPort: 18080
+          name: history-ui
+        volumeMounts:
+        - name: spark-events
+          mountPath: /tmp/spark-events
+      volumes:
+      - name: spark-events
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-history-server
+  namespace: spark
+spec:
+  selector:
+    app: spark-history-server
+  ports:
+  - port: 18080
+    targetPort: 18080
+    name: history-ui
+  type: ClusterIP

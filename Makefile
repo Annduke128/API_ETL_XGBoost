@@ -56,11 +56,13 @@ help:
 	@echo "║                                                                  ║"
 	@echo "║  KUBERNETES / K3S                                                ║"
 	@echo "║    make app-k3s         - 🚀 Run FULL pipeline on K3s            ║"
+	@echo "║    make k3s-spark       - ⚡ Spark ETL (Hybrid)                  ║"
 	@echo "║    make k3s-csv         - Process CSV files on K3s               ║"
 	@echo "║    make k3s-sync        - Run Sync job on K3s                    ║"
 	@echo "║    make k3s-dbt         - Run DBT build on K3s                   ║"
 	@echo "║    make k3s-ml-train    - Run ML training on K3s                 ║"
 	@echo "║    make k3s-ml-predict  - Run ML predictions on K3s              ║"
+	@echo "║    make spark-deploy    - Deploy Spark cluster                   ║"
 	@echo "║    make k8s-deploy-all  - Deploy all K3s resources               ║"
 	@echo "║    make k8s-status      - Check K3s status                       ║"
 	@echo "║                                                                  ║"
@@ -499,4 +501,66 @@ k3s-logs: kubectl-check
 	@echo "📜 Logs from latest jobs..."
 	$(KUBECTL_CMD) logs -n $(NAMESPACE) job/sync-data --tail=50 2>/dev/null || echo "No sync logs"
 	$(KUBECTL_CMD) logs -n $(NAMESPACE) job/ml-train --tail=50 2>/dev/null || echo "No training logs"
+
+# ============================================================================
+# SPARK ETL (Hybrid Architecture)
+# ============================================================================
+
+spark-deploy: kubectl-check
+	@echo "🚀 Deploying Spark Cluster..."
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/spark/00-namespace.yaml
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/spark/01-storage.yaml
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/spark/02-spark-master.yaml
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/spark/03-spark-worker.yaml
+	$(KUBECTL_CMD) apply -f $(K8S_DIR)/spark/04-spark-history-server.yaml
+	@echo "⏳ Waiting for Spark to be ready..."
+	sleep 10
+	@echo "Checking Spark status..."
+	$(KUBECTL_CMD) get pods -n spark
+	@echo ""
+	@echo "✅ Spark cluster deployed!"
+	@echo "   Master UI: kubectl port-forward svc/spark-master 8080:8080 -n spark"
+
+k3s-spark: kubectl-check
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║           ⚡ Spark Hybrid ETL Pipeline                               ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "Pipeline: Spark(Scala) → Python(UDFs) → PostgreSQL → ClickHouse"
+	@echo ""
+	@read -p "Continue? (yes/no): " confirm && [ "$$confirm" = "yes" ] || (echo "Cancelled." && exit 1)
+	
+	@echo ""
+	@echo "📁 Step 1: Running Spark ETL (Heavy Lifting)..."
+	@cat $(K8S_DIR)/05-ml-pipeline/job-spark-etl.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@echo "⏳ Waiting for Spark ETL to complete (this may take 5-15 minutes)..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/spark-etl-hybrid -n $(NAMESPACE) --timeout=1800s
+	@echo "✅ Spark ETL complete!"
+	
+	@echo ""
+	@echo "Next steps:"
+	@echo "  - Check results: kubectl logs -n $(NAMESPACE) job/spark-etl-hybrid"
+	@echo "  - View processed data: kubectl exec -n spark deployment/spark-worker -- ls -la /shared/processed"
+
+spark-status:
+	@echo "🔥 Spark Cluster Status"
+	@echo "======================="
+	@echo "Pods in spark namespace:"
+	$(KUBECTL_CMD) get pods -n spark
+	@echo ""
+	@echo "Services:"
+	$(KUBECTL_CMD) get svc -n spark
+
+spark-logs:
+	@echo "📜 Spark Master Logs:"
+	$(KUBECTL_CMD) logs -n spark deployment/spark-master --tail=50
+	@echo ""
+	@echo "📜 Spark Worker Logs:"
+	$(KUBECTL_CMD) logs -n spark deployment/spark-worker --tail=50
+
+spark-delete:
+	@echo "⚠️  Deleting Spark cluster..."
+	$(KUBECTL_CMD) delete namespace spark --ignore-not-found=true
+	@echo "✅ Spark cluster deleted"
 
