@@ -1,8 +1,15 @@
+# ⚠️ DEPRECATED: Replaced by job-spark-etl.yaml
+# This job is kept for backward compatibility only
+# Please use: kubectl apply -f job-spark-etl.yaml
+# For better performance, use Spark Hybrid ETL: make k3s-spark
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: csv-process
   namespace: hasu-ml
+  annotations:
+    deprecated: "true"
+    replacement: "job-spark-etl.yaml"
 spec:
   template:
     spec:

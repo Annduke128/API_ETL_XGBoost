@@ -364,55 +364,52 @@ k8s-delete: kubectl-check
 kubectl-check:
 	@which k3s kubectl > /dev/null 2>&1 || which kubectl > /dev/null 2>&1 || (echo "❌ kubectl not found. Please install kubectl or k3s." && exit 1)
 
-# Main command: Run full pipeline on K3s
+# Main command: Run full pipeline on K3s (Using Spark Hybrid ETL)
 app-k3s: kubectl-check
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════════╗"
 	@echo "║           🚀 Running Full Pipeline on K3s Cluster                    ║"
+	@echo "║           Using Spark Hybrid Architecture                            ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "This will execute: Sync → DBT → ML Training → Predictions"
+	@echo "Pipeline: Spark ETL → Python UDFs → DBT → ML Training → Predictions"
 	@echo ""
 	@read -p "Continue? (yes/no): " confirm && [ "$$confirm" = "yes" ] || (echo "Cancelled." && exit 1)
 	
 	@echo ""
-	@echo "📁 Step 0: Deleting old jobs (if any)..."
-	-$(KUBECTL_CMD) delete job sync-data -n $(NAMESPACE) 2>/dev/null || true
+	@echo "📁 Step 0: Ensure Spark cluster is ready..."
+	$(KUBECTL_CMD) get pods -n spark 2>/dev/null || (echo "⚠️  Spark not deployed. Running: make spark-deploy" && make spark-deploy)
+	@sleep 5
+	
+	@echo ""
+	@echo "⚡ Step 1: Spark Hybrid ETL (CSV → PostgreSQL → ClickHouse)"
+	@cat $(K8S_DIR)/05-ml-pipeline/job-spark-etl.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@echo "⏳ Waiting for Spark ETL to complete (5-15 minutes)..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/spark-etl-hybrid -n $(NAMESPACE) --timeout=1800s
+	@echo "✅ Spark ETL complete!"
+	
+	@echo ""
+	@echo "🏗️ Step 2: DBT Build"
 	-$(KUBECTL_CMD) delete job dbt-build -n $(NAMESPACE) 2>/dev/null || true
-	-$(KUBECTL_CMD) delete job ml-train -n $(NAMESPACE) 2>/dev/null || true
-	-$(KUBECTL_CMD) delete job ml-predict -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
-	
-	@echo ""
-	@echo "📄 Step 1: Process CSV Files → PostgreSQL"
-	@cat $(K8S_DIR)/05-ml-pipeline/job-csv-process.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
-	@echo "⏳ Waiting for CSV processing to complete..."
-	$(KUBECTL_CMD) wait --for=condition=complete job/csv-process -n $(NAMESPACE) --timeout=600s
-	@echo "✅ CSV processing complete!"
-	
-	@echo ""
-	@echo "📥 Step 2: Sync PostgreSQL → ClickHouse"
-	@cat $(K8S_DIR)/05-ml-pipeline/job-sync.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
-	@echo "⏳ Waiting for sync to complete..."
-	$(KUBECTL_CMD) wait --for=condition=complete job/sync-data -n $(NAMESPACE) --timeout=600s
-	@echo "✅ Sync complete!"
-	
-	@echo ""
-	@echo "🏗️ Step 3: DBT Build"
 	@cat $(K8S_DIR)/05-ml-pipeline/job-dbt-build.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
 	@echo "⏳ Waiting for DBT to complete..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/dbt-build -n $(NAMESPACE) --timeout=900s
 	@echo "✅ DBT build complete!"
 	
 	@echo ""
-	@echo "🤖 Step 4: ML Training"
+	@echo "🤖 Step 3: ML Training"
+	-$(KUBECTL_CMD) delete job ml-train -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
 	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
-	@echo "⏳ Waiting for training to complete (this may take 15-30 minutes)..."
+	@echo "⏳ Waiting for training to complete (15-30 minutes)..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train -n $(NAMESPACE) --timeout=3600s
 	@echo "✅ ML training complete!"
 	
 	@echo ""
-	@echo "🔮 Step 5: Generate Predictions"
+	@echo "🔮 Step 4: Generate Predictions"
+	-$(KUBECTL_CMD) delete job ml-predict -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
 	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
 	@echo "⏳ Waiting for predictions..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/ml-predict -n $(NAMESPACE) --timeout=600s

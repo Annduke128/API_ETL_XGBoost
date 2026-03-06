@@ -359,6 +359,100 @@ services:
       - sync
     # No default command - must specify script to run
 
+  # ============================================
+  # Spark - Distributed ETL (Hybrid Architecture)
+  # ============================================
+  spark-master:
+    image: bitnami/spark:3.5.0
+    container_name: retail_spark_master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+      - SPARK_MASTER_LOG=/var/log/spark
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=retail_db
+      - POSTGRES_USER=retail_user
+      - POSTGRES_PASSWORD=retail_password
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_DB=retail_dw
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=clickhouse_password
+    ports:
+      - "8090:8080"  # Spark UI (different port to avoid conflict with Airflow)
+      - "7077:7077"
+    volumes:
+      - spark_checkpoint:/tmp/checkpoint
+      - spark_shared:/shared
+      - ../spark-etl/python_udfs:/opt/spark/python_udfs:ro
+    networks:
+      - retail_network
+    profiles:
+      - spark
+
+  spark-worker:
+    image: bitnami/spark:3.5.0
+    container_name: retail_spark_worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=4g
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_PORT=8888
+      - SPARK_WORKER_WEBUI_PORT=8081
+    depends_on:
+      - spark-master
+    volumes:
+      - spark_checkpoint:/tmp/checkpoint
+      - spark_shared:/shared
+      - ../csv_input:/csv_input:ro
+    networks:
+      - retail_network
+    profiles:
+      - spark
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          memory: 2G
+
+  # Spark ETL Job Runner
+  spark-etl:
+    build:
+      context: ../spark-etl
+      dockerfile: Dockerfile
+    image: retail-spark-etl:latest
+    container_name: retail_spark_etl
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - INPUT_PATH=/csv_input
+      - OUTPUT_PATH=/shared/processed
+      - MODE=full
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=retail_db
+      - POSTGRES_USER=retail_user
+      - POSTGRES_PASSWORD=retail_password
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_DB=retail_dw
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=clickhouse_password
+    volumes:
+      - spark_shared:/shared
+      - ../csv_input:/csv_input:ro
+    depends_on:
+      - spark-master
+      - spark-worker
+      - postgres
+      - clickhouse
+    networks:
+      - retail_network
+    profiles:
+      - spark-etl
+
 volumes:
   redis_data:
   postgres_data:
@@ -368,6 +462,8 @@ volumes:
   superset_db_data:
   superset_data:
   ml_models:
+  spark_checkpoint:
+  spark_shared:
 
 networks:
   retail_network:

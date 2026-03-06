@@ -15,6 +15,7 @@
         dbt-preview dbt-show-source dbt-show-model dbt-validate \
         sync-to-ch pipeline-full pipeline-quick \
         ml ml-train ml-predict ml-all ml-train-fast ml-train-optimal \
+        spark spark-up spark-down spark-etl spark-status \
         psql clickhouse redis \
         reset-db reset-all clean disk
 
@@ -68,6 +69,12 @@ help:
 	@echo "║    make ml-optimal      - Train with 100 trials                  ║"
 	@echo "║    make ml-all          - Train + Predict + Email                ║"
 	@echo "║    make ml-predict      - Generate predictions only              ║"
+	@echo "║                                                                  ║"
+	@echo "║  SPARK ETL (Hybrid)                                              ║"
+	@echo "║    make spark-up        - Start Spark cluster                    ║"
+	@echo "║    make spark-etl       - Run Spark ETL pipeline                 ║"
+	@echo "║    make spark-status    - Check Spark status                     ║"
+	@echo "║    make spark-down      - Stop Spark cluster                     ║"
 	@echo "║                                                                  ║"
 	@echo "║  DATABASE CLI                                                    ║"
 	@echo "║    make psql            - Connect to PostgreSQL                  ║"
@@ -125,6 +132,15 @@ up-sync:
 	@make up
 	@echo "🔄 Starting Sync Tool..."
 	docker-compose -f $(COMPOSE_FILE) --profile sync up -d sync-tool
+
+# Khởi động Spark cluster
+up-spark:
+	@make up
+	@echo "🔥 Starting Spark cluster..."
+	docker-compose -f $(COMPOSE_FILE) --profile spark up -d spark-master spark-worker
+	@sleep 10
+	@echo "✅ Spark cluster started!"
+	@echo "   Spark UI: http://localhost:8090"
 
 # Khởi động tất cả services
 up-all:
@@ -359,6 +375,54 @@ ml-predict:
 	@echo "📈 Generating predictions..."
 	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline python -c \
 		"from xgboost_forecast import SalesForecaster; f = SalesForecaster(); p = f.predict_next_week(); f.save_forecasts(p)"
+
+# ============================================================================
+# SPARK ETL (Hybrid Architecture)
+# ============================================================================
+
+spark: spark-up
+
+spark-up:
+	@echo "🔥 Starting Spark cluster..."
+	@make up
+	@sleep 5
+	docker-compose -f $(COMPOSE_FILE) --profile spark up -d spark-master spark-worker
+	@sleep 10
+	@echo "✅ Spark cluster started!"
+	@echo "   Spark Master UI: http://localhost:8090"
+	@echo "   Spark Master: spark://spark-master:7077"
+
+spark-down:
+	@echo "🛑 Stopping Spark cluster..."
+	docker-compose -f $(COMPOSE_FILE) --profile spark --profile spark-etl down
+
+spark-status:
+	@echo "🔥 Spark Cluster Status"
+	@echo "======================"
+	@docker-compose -f $(COMPOSE_FILE) --profile spark ps
+	@echo ""
+	@echo "Spark UI: http://localhost:8090"
+
+spark-logs:
+	@echo "📜 Spark Master Logs:"
+	@docker-compose -f $(COMPOSE_FILE) logs --tail=50 spark-master
+
+# Run Spark ETL pipeline
+spark-etl:
+	@echo "⚡ Running Spark Hybrid ETL..."
+	@echo "   Phase 1: Spark (Scala) - Heavy Lifting"
+	@echo "   Phase 2: Python UDFs - Business Logic"
+	@echo "   Phase 3: Sync to ClickHouse"
+	docker-compose -f $(COMPOSE_FILE) --profile spark --profile spark-etl run --rm spark-etl
+	@echo ""
+	@echo "✅ Spark ETL completed!"
+
+# Full pipeline with Spark
+pipeline-spark: spark-etl dbt-build
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║     ✅ SPARK HYBRID PIPELINE COMPLETED SUCCESSFULLY          ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
 
 # ============================================================================
 # DATABASE CLI
