@@ -20,6 +20,29 @@ echo "  Spark Master: $SPARK_MASTER"
 echo "  Mode: $MODE"
 echo ""
 
+# Function to import products
+try_import_products() {
+    echo "📦 Checking for DanhSachSanPham.csv..."
+    if [ -f "$INPUT_PATH/DanhSachSanPham.csv" ]; then
+        echo "📥 Importing products..."
+        python3 /app/import_products.py "$INPUT_PATH/DanhSachSanPham.csv"
+    else
+        echo "⚠️  DanhSachSanPham.csv not found, skipping product import"
+    fi
+}
+
+# Function to import inventory
+try_import_inventory() {
+    echo "📦 Checking for inventory files (BaoCaoXuatNhapTon)..."
+    inventory_file=$(find "$INPUT_PATH" -name "*XuatNhapTon*.xlsx" -o -name "*TonKho*.xlsx" 2>/dev/null | head -1)
+    if [ -n "$inventory_file" ]; then
+        echo "📥 Importing inventory from: $inventory_file"
+        python3 /app/import_inventory.py "$inventory_file"
+    else
+        echo "⚠️  No inventory file found, skipping inventory import"
+    fi
+}
+
 # Function to run Spark Scala job
 run_spark_etl() {
     echo "🚀 Phase 1: Running Spark ETL (Heavy Lifting)..."
@@ -67,6 +90,12 @@ sync_to_clickhouse() {
 
 # Main execution logic
 case "$MODE" in
+    products)
+        try_import_products
+        ;;
+    inventory)
+        try_import_inventory
+        ;;
     spark-only)
         run_spark_etl
         ;;
@@ -77,6 +106,9 @@ case "$MODE" in
         sync_to_clickhouse
         ;;
     full|*)
+        echo "🔄 Running FULL pipeline..."
+        try_import_products
+        try_import_inventory
         run_spark_etl
         run_python_udfs
         sync_to_clickhouse
