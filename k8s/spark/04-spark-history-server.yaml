@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: spark-history-server
-        image: bitnami/spark:3.5
+        image: docker.io/bitnami/spark:latest
         command:
         - /opt/bitnami/spark/sbin/start-history-server.sh
         env:

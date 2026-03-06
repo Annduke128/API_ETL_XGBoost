@@ -363,7 +363,7 @@ services:
   # Spark - Distributed ETL (Hybrid Architecture)
   # ============================================
   spark-master:
-    image: bitnami/spark:3.5
+    image: docker.io/bitnami/spark:latest
     container_name: retail_spark_master
     environment:
       - SPARK_MODE=master
@@ -391,7 +391,7 @@ services:
       - spark
 
   spark-worker:
-    image: bitnami/spark:3.5
+    image: docker.io/bitnami/spark:latest
     container_name: retail_spark_worker
     environment:
       - SPARK_MODE=worker

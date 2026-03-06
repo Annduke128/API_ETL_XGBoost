@@ -18,7 +18,7 @@ COPY src ./src
 RUN sbt assembly
 
 # Stage 2: Runtime image với Spark + Python
-FROM bitnami/spark:3.5
+FROM docker.io/bitnami/spark:latest
 
 USER root
 
