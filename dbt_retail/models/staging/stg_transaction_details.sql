@@ -5,7 +5,17 @@
 }}
 
 WITH source AS (
-    SELECT * FROM {{ source('retail_source', 'staging_transaction_details') }}
+    SELECT 
+        id,
+        giao_dich_id,
+        product_id,
+        toInt32OrNull(so_luong) as so_luong,
+        toFloat64OrNull(gia_ban) as gia_ban,
+        toFloat64OrNull(gia_von) as gia_von,
+        toFloat64OrNull(loi_nhuan) as loi_nhuan,
+        toFloat64OrNull(tong_loi_nhuan) as tong_loi_nhuan,
+        created_at
+    FROM {{ source('retail_source', 'staging_transaction_details') }}
 ),
 
 products_ref AS (
