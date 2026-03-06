@@ -1,7 +1,7 @@
 {{
   config(
     materialized = 'view',
-    tags = ['marts', products', 'abc', 'daily']
+    tags = ['marts', 'products', 'abc', 'daily']
   )
 }}
 

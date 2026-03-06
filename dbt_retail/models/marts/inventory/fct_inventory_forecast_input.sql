@@ -1,7 +1,7 @@
 {{
     config(
         materialized='table',
-        tags = ['marts', ml', 'forecasting']
+        tags = ['marts', 'ml', 'forecasting']
     )
 }}
 
