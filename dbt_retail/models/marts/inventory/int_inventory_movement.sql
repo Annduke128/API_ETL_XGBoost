@@ -8,31 +8,39 @@ WITH transaction_details AS (
     SELECT * FROM {{ ref('stg_transaction_details') }}
 ),
 
+transactions AS (
+    SELECT 
+        transaction_id,
+        transaction_date
+    FROM {{ ref('stg_transactions') }}
+),
+
 daily_movement AS (
     SELECT
-        transaction_date,
-        product_code,
-        product_name,
-        brand,
-        category_l1,
-        category_l2,
+        t.transaction_date,
+        td.product_code,
+        td.product_name,
+        td.brand,
+        td.category_l1,
+        td.category_l2,
         
         -- Xuất hàng (bán ra)
-        SUM(quantity) AS units_sold,
-        SUM(line_revenue) AS revenue,
-        SUM(line_cost) AS cogs,
-        SUM(line_profit) AS profit,
+        SUM(td.quantity) AS units_sold,
+        SUM(td.line_revenue) AS revenue,
+        SUM(td.line_cost) AS cogs,
+        SUM(td.line_profit) AS profit,
         
-        COUNT(DISTINCT transaction_id) AS transaction_count
+        COUNT(DISTINCT td.transaction_id) AS transaction_count
         
-    FROM transaction_details
+    FROM transaction_details td
+    JOIN transactions t ON td.transaction_id = t.transaction_id
     GROUP BY 
-        transaction_date,
-        product_code,
-        product_name,
-        brand,
-        category_l1,
-        category_l2
+        t.transaction_date,
+        td.product_code,
+        td.product_name,
+        td.brand,
+        td.category_l1,
+        td.category_l2
 )
 
 SELECT * FROM daily_movement

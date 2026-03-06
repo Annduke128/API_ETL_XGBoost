@@ -25,11 +25,11 @@
 
 WITH store_base AS (
     SELECT 
-        id as store_id_raw,
-        ma_chi_nhanh as branch_code,
-        ten_chi_nhanh as branch_name,
-        dia_chi as address,
-        thanh_pho as city
+        branch_id as store_id_raw,
+        branch_code,
+        branch_name,
+        address,
+        city
     FROM {{ ref('stg_branches') }}
 ),
 

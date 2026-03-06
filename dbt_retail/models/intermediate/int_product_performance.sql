@@ -8,6 +8,21 @@ WITH transaction_details AS (
     SELECT * FROM {{ ref('stg_transaction_details') }}
 ),
 
+transactions AS (
+    SELECT 
+        transaction_id,
+        transaction_date
+    FROM {{ ref('stg_transactions') }}
+),
+
+td_with_date AS (
+    SELECT 
+        td.*,
+        t.transaction_date
+    FROM transaction_details td
+    JOIN transactions t ON td.transaction_id = t.transaction_id
+),
+
 product_metrics AS (
     SELECT
         product_code,
@@ -15,7 +30,6 @@ product_metrics AS (
         brand,
         category_l1,
         category_l2,
-        category_l3,
         
         -- Tổng số liệu
         COUNT(DISTINCT transaction_id) AS total_transactions,
@@ -25,7 +39,7 @@ product_metrics AS (
         
         -- Giá trị trung bình
         AVG(selling_price) AS avg_selling_price,
-        AVG(profit) AS avg_profit_per_unit,
+        AVG(line_profit) AS avg_profit_per_unit,
         
         -- Biên lợi nhuận
         CASE 
@@ -41,8 +55,8 @@ product_metrics AS (
         -- Số ngày bán hàng
         COUNT(DISTINCT transaction_date) AS selling_days
         
-    FROM transaction_details
-    GROUP BY 1, 2, 3, 4, 5, 6
+    FROM td_with_date
+    GROUP BY 1, 2, 3, 4, 5
 ),
 
 abc_classification AS (
