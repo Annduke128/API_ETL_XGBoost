@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS staging_transactions (
     thoi_gian DateTime,
     tong_tien_hang Float64,
     giam_gia Float64,
+    doanh_thu Float64,
+    tong_gia_von Float64,
+    loi_nhuan_gop Float64,
     khach_phai_tra Float64,
     khach_dua Float64,
     created_at DateTime DEFAULT now()
@@ -59,6 +62,7 @@ CREATE TABLE IF NOT EXISTS staging_branches (
     ma_chi_nhanh String,
     ten_chi_nhanh String,
     dia_chi String,
+    thanh_pho String,
     created_at DateTime DEFAULT now()
 ) ENGINE = MergeTree()
 ORDER BY (ma_chi_nhanh)
