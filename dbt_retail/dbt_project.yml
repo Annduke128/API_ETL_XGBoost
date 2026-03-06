@@ -102,6 +102,12 @@ seeds:
     store_types:
       +column_types:
         type_code: varchar(10)
+    
+    seasonality_factors:
+      +column_types:
+        month: Int8
+        season: varchar(20)
+        peak_reason: varchar(50)
         type_code_2: varchar(5)
         type_name_vn: varchar(100)
         type_name_en: varchar(100)

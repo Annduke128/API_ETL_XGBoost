@@ -4,28 +4,25 @@
     )
 }}
 
-WITH source AS (
-    SELECT * FROM {{ source('retail_source', 'staging_branches') }}
-),
+-- Branches data - currently empty, using dummy data
+-- Will use actual data when branches table is populated
 
-renamed AS (
-    SELECT
-        id AS branch_id,
-        ma_chi_nhanh AS branch_code,
-        ten_chi_nhanh AS branch_name,
-        dia_chi AS address,
-        thanh_pho AS city,
-        
-        -- Loại chi nhánh
-        CASE 
-            WHEN ten_chi_nhanh LIKE '%Flagship%' THEN 'Flagship'
-            WHEN ten_chi_nhanh LIKE '%Mini%' THEN 'Mini'
-            ELSE 'Standard'
-        END AS branch_type,
-        
-        created_at
-        
-    FROM source
-)
+SELECT 
+    'BHS001' AS branch_id,
+    'BHS001' AS branch_code,
+    'BHS Đại Phúc' AS branch_name,
+    'Đại Phúc' AS address,
+    'Bình Dương' AS city,
+    'Standard' AS branch_type,
+    now() AS created_at
 
-SELECT * FROM renamed
+UNION ALL
+
+SELECT 
+    'BHS002' AS branch_id,
+    'BHS002' AS branch_code,
+    'BHS Thủ Dầu Một' AS branch_name,
+    'Thủ Dầu Một' AS address,
+    'Bình Dương' AS city,
+    'Flagship' AS branch_type,
+    now() AS created_at

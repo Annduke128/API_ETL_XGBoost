@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY docker/data_cleaning/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy code từ data_cleaning/
-COPY data_cleaning/*.py .
+COPY *.py .
 
 # Create directories (hỗ trợ cả csv và excel)
 RUN mkdir -p /csv_input /csv_output /csv_input/processed /csv_input/error

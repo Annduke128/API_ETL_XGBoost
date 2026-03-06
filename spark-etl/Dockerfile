@@ -42,8 +42,14 @@ RUN pip3 install --no-cache-dir \
 # Copy built JAR from builder
 COPY --from=builder /build/target/scala-2.12/retail-spark-etl-assembly-1.0.0.jar /opt/spark/jars/
 
+# Download PostgreSQL JDBC driver
+RUN wget -q -O /opt/spark/jars/postgresql-42.6.0.jar https://jdbc.postgresql.org/download/postgresql-42.6.0.jar
+
 # Copy Python UDF scripts
 COPY python_udfs /opt/spark/python_udfs
+
+# Copy PySpark ETL scripts
+COPY python_etl /opt/spark/python_etl
 
 # Set environment variables
 ENV SPARK_HOME=/opt/bitnami/spark

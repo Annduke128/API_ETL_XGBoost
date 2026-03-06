@@ -40,11 +40,20 @@ def clean_numeric(value):
 
 
 def import_products(file_path):
-    """Import file DanhSachSanPham.csv - raw data only, no parsing"""
+    """Import file DanhSachSanPham - raw data only, no parsing"""
     
     print(f"📖 Đọc file: {file_path}")
-    df = pd.read_csv(file_path, encoding='utf-8-sig')
+    
+    # Detect file type and read accordingly
+    if file_path.endswith('.csv'):
+        df = pd.read_csv(file_path, encoding='utf-8-sig')
+    elif file_path.endswith(('.xlsx', '.xls')):
+        df = pd.read_excel(file_path, engine='openpyxl')
+    else:
+        raise ValueError(f"Không hỗ trợ file format: {file_path}")
+    
     print(f"📊 Tổng số sản phẩm: {len(df)}")
+    print(f"📋 Các cột: {list(df.columns)}")
     
     # Parse nhóm hàng
     nhom_hang_parsed = df['Nhóm hàng(3 Cấp)'].apply(parse_nhom_hang)
@@ -95,5 +104,14 @@ def import_products(file_path):
 
 
 if __name__ == '__main__':
-    file_path = sys.argv[1] if len(sys.argv) > 1 else '/csv_input/DanhSachSanPham.csv'
+    if len(sys.argv) < 2:
+        print("Usage: python import_products.py <file_path>")
+        print("Example: python import_products.py /csv_input/DanhSachSanPham.xlsx")
+        sys.exit(1)
+    
+    file_path = sys.argv[1]
+    if not os.path.exists(file_path):
+        print(f"❌ File không tồn tại: {file_path}")
+        sys.exit(1)
+    
     import_products(file_path)

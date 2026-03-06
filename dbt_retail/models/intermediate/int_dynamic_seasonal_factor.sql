@@ -42,7 +42,7 @@ peak_days_actual AS (
             ELSE 'weekday'
         END) AS dominant_day_type
     FROM {{ ref('fct_regular_sales') }} f
-    INNER JOIN {{ ref('seasonality_factors') }} s 
+    INNER JOIN {{ ref('stg_seasonality_factors') }} s 
         ON toMonth(f.transaction_date) = s.month
     WHERE f.transaction_date >= today() - 365
     GROUP BY 

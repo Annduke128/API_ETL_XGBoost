@@ -90,17 +90,33 @@ def insert_dataframe_batch(client, table_name, df, batch_size=5000):
     columns = df.columns.tolist()
     total_rows = len(df)
     
-    # Xử lý NULL values - thay thế None bằng giá trị mặc định
+    # Xử lý NULL values và convert data types cho ClickHouse
     df = df.copy()
     for col in df.columns:
-        if df[col].dtype == 'object':  # String columns
-            df[col] = df[col].fillna('')  # NULL -> empty string
+        if df[col].dtype == 'object':
+            # Check if this is a date column (contains datetime.date objects)
+            non_null = df[col].dropna()
+            if len(non_null) > 0:
+                first_val = non_null.iloc[0]
+                # Check if it's a datetime.date (but not datetime.datetime)
+                if type(first_val).__name__ == 'date':
+                    # Convert date to string format 'YYYY-MM-DD' for ClickHouse Date type
+                    df[col] = df[col].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '1970-01-01')
+                elif type(first_val).__name__ == 'datetime':
+                    # Keep as pandas datetime for ClickHouse DateTime type
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                else:
+                    # Regular string column
+                    df[col] = df[col].fillna('')
+            else:
+                df[col] = df[col].fillna('')
         elif pd.api.types.is_integer_dtype(df[col]):
-            df[col] = df[col].fillna(0)   # NULL -> 0
+            df[col] = df[col].fillna(0)
         elif pd.api.types.is_float_dtype(df[col]):
-            df[col] = df[col].fillna(0.0)  # NULL -> 0.0
+            df[col] = df[col].fillna(0.0)
         elif pd.api.types.is_datetime64_any_dtype(df[col]):
-            df[col] = df[col].fillna(pd.Timestamp.now())  # NULL -> now
+            # Keep as datetime objects for ClickHouse DateTime
+            df[col] = df[col].fillna(pd.Timestamp('1970-01-01'))
     
     # Convert DataFrame to list of tuples
     data = df.values.tolist()
@@ -117,16 +133,27 @@ def insert_dataframe_batch(client, table_name, df, batch_size=5000):
     return total_rows
 
 
-def sync_table(pg_engine, ch_client, pg_table: str, ch_table: str):
+def sync_table(pg_engine, ch_client, pg_table: str, ch_table: str, skip_empty=True):
     """Đồng bộ 1 bảng từ PostgreSQL sang ClickHouse"""
     logger.info(f"🔄 Đồng bộ {pg_table} -> {ch_table}")
     
     # Extract từ PostgreSQL
     logger.info(f"📥 Reading from PostgreSQL...")
+    
+    # Check if table exists first
+    try:
+        check_df = pd.read_sql(f"SELECT 1 FROM {pg_table} LIMIT 1", pg_engine)
+    except Exception as e:
+        logger.warning(f"⚠️  Bảng {pg_table} không tồn tại hoặc lỗi: {e}")
+        return 0
+    
     df = pd.read_sql(f"SELECT * FROM {pg_table}", pg_engine)
     
     if df.empty:
-        logger.warning(f"⚠️  Bảng {pg_table} không có dữ liệu")
+        if skip_empty:
+            logger.info(f"ℹ️  Bảng {pg_table} rỗng, bỏ qua (skip_empty=True)")
+        else:
+            logger.warning(f"⚠️  Bảng {pg_table} không có dữ liệu")
         return 0
     
     logger.info(f"📊 Đã extract {len(df):,} dòng, {len(df.columns)} cột")
@@ -183,6 +210,7 @@ def main():
         ('transactions', 'staging_transactions'),
         ('transaction_details', 'staging_transaction_details'),
         ('branches', 'staging_branches'),
+        ('inventory_transactions', 'staging_inventory_transactions'),
     ]
     
     for pg_table, ch_table in tables:
@@ -199,15 +227,20 @@ def main():
     logger.info(f"✅ HOÀN TẤT: Tổng cộng {total_rows:,} dòng đã đồng bộ")
     logger.info("=" * 60)
     
-    # Kiểm tra
+    # Kiểm tra - chỉ kiểm tra các bảng đã được sync thành công
     logger.info("\n📊 Kiểm tra dữ liệu trong ClickHouse:")
     for _, ch_table in tables:
         try:
+            # Check if table exists first
+            result = ch_client.execute(f"SHOW TABLES LIKE '{ch_table}'")
+            if not result:
+                logger.info(f"   {ch_table}: (không tồn tại - bảng rỗng hoặc chưa sync)")
+                continue
             result = ch_client.execute(f"SELECT COUNT(*) FROM {ch_table}")
             count = result[0][0] if result else 0
             logger.info(f"   {ch_table}: {count:,} dòng")
         except Exception as e:
-            logger.warning(f"   {ch_table}: Lỗi - {e}")
+            logger.info(f"   {ch_table}: (chưa có dữ liệu)")
 
 
 if __name__ == '__main__':

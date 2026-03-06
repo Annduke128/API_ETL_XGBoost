@@ -1,15 +1,18 @@
 # Makefile cho Retail Data Pipeline
-# Các lệnh chạy ứng dụng thuần túy (không phụ thuộc Docker)
+# Các lệnh chạy ứng dụng sử dụng Docker (khuyến nghị)
 # 
-# Để chạy với Docker, sử dụng: cd docker && make [command]
+# Các lệnh ML và Data Processing đã được chuyển sang Docker
+# để đảm bảo môi trường nhất quán và không cần cài đặt Python dependencies locally
 #
 
-.PHONY: help install test \
+.PHONY: help install test check-env \
         dbt dbt-test dbt-docs dbt-build dbt-build-staging dbt-build-marts dbt-build-full dbt-build-model \
         dbt-deps dbt-seed dbt-list dbt-list-staging dbt-list-marts dbt-list-sources dbt-list-all \
         dbt-preview dbt-show-source dbt-show-model dbt-validate dbt-test-model dbt-compile \
         ml ml-train ml-predict ml-all ml-fast ml-optimal ml-report \
-        pipeline-full pipeline-quick app \
+        pipeline-full pipeline-quick app app-legacy \
+        smart-pipeline smart-pipeline-with-sync smart-process smart-dry-run \
+        use-k3s use-docker \
         k8s-deploy k8s-deploy-all k8s-update k8s-status k8s-logs k8s-delete \
         format lint check
 
@@ -66,8 +69,29 @@ help:
 	@echo "║    make k8s-deploy-all  - Deploy all K3s resources               ║"
 	@echo "║    make k8s-status      - Check K3s status                       ║"
 	@echo "║                                                                  ║"
-	@echo "║  DOCKER                                                          ║"
-	@echo "║    cd docker && make help    - Docker commands                   ║"
+	@echo "║  🚀 ONE-SHOT COMMANDS (Recommended)                               ║"
+	@echo "║    make app             - 🧠 Smart full pipeline (auto-detect)   ║"
+	@echo "║    make app-legacy      - 📁 Legacy full pipeline (manual CSV)   ║"
+	@echo "║                                                                  ║"
+	@echo "║  SMART PIPELINE (Auto-detect by filename)                        ║"
+	@echo "║    make smart-pipeline  - Smart process → Sync → DBT → ML        ║"
+	@echo "║    make smart-process   - Auto-detect & process all files        ║"
+	@echo "║    make smart-dry-run   - Preview what will be processed         ║"
+	@echo "║                                                                  ║"
+	@echo "║  LOCAL DOCKER (No Python install needed)                         ║"
+	@echo "║    make pipeline-full   - Process CSV → Sync → DBT               ║"
+	@echo "║    make process         - Process CSV files                      ║"
+	@echo "║    make sync-to-ch      - Sync PostgreSQL → ClickHouse           ║"
+	@echo "║    make import-inventory- Import inventory from Excel            ║"
+	@echo "║    make ml-all          - Train + Predict + Report (Docker)      ║"
+	@echo "║                                                                  ║"
+	@echo "║  ENVIRONMENT SWITCHING                                           ║"
+	@echo "║    make use-k3s           - Switch from Docker to K3s            ║"
+	@echo "║    make use-docker        - Switch from K3s to Docker            ║"
+	@echo "║    make check-env         - Check for conflicting environments   ║"
+	@echo "║                                                                  ║"
+	@echo "║  DOCKER COMPOSE DIRECTORY                                        ║"
+	@echo "║    cd docker && make help    - All Docker commands               ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
 
 install:
@@ -107,7 +131,7 @@ DBT_QUIET := --quiet
 
 # Change to dbt directory and run commands
 define dbt-cmd
-	cd $(DBT_DIR) && dbt $(1) $(DBT_TARGET)
+	cd docker && docker-compose run --rm dbt dbt $(1) $(DBT_TARGET)
 endef
 
 dbt-deps:
@@ -148,7 +172,7 @@ dbt-show-source:
 		exit 1; \
 	fi
 	@echo "👁️  Previewing source $(SOURCE)..."
-	cd $(DBT_DIR) && dbt show --inline "SELECT * FROM {{ source('retail_source', '$(SOURCE)') }} LIMIT $(or $(LIMIT),10)" $(DBT_TARGET)
+	cd docker && docker-compose run --rm dbt dbt show --inline "SELECT * FROM {{ source('retail_source', '$(SOURCE)') }} LIMIT $(or $(LIMIT),10)" $(DBT_TARGET)
 
 dbt-build-staging: dbt-seed
 	@echo "🔧 Building staging models..."
@@ -186,7 +210,7 @@ dbt-docs:
 	@echo "📚 Generating docs..."
 	$(call dbt-cmd,docs generate)
 	@echo "📖 Starting docs server at http://localhost:8080"
-	cd $(DBT_DIR) && dbt docs serve --host 0.0.0.0 --port 8080
+	cd docker && docker-compose run --rm -p 8080:8080 dbt dbt docs serve --host 0.0.0.0 --port 8080
 
 dbt-docs-generate:
 	@echo "📚 Generating docs..."
@@ -203,7 +227,7 @@ dbt-test-full: dbt-test
 ML_DIR := ml_pipeline
 
 define ml-cmd
-	cd $(ML_DIR) && $(PYTHON) $(1)
+	cd docker && docker-compose --profile ml run --rm ml-pipeline python $(1)
 endef
 
 ml: ml-train
@@ -226,7 +250,7 @@ ml-all:
 
 ml-predict:
 	@echo "📈 Generating predictions..."
-	$(call ml-cmd,-c "from xgboost_forecast import SalesForecaster; f = SalesForecaster(); p = f.predict_next_week(); f.save_forecasts(p)")
+	cd docker && docker-compose --profile ml run --rm ml-pipeline python -c "from xgboost_forecast import SalesForecaster; f = SalesForecaster(); p = f.predict_next_week(); f.save_forecasts(p)"
 
 ml-report:
 	@echo "📊 Generating report..."
@@ -238,14 +262,26 @@ ml-report:
 
 DATA_DIR := data_cleaning
 
+# ============================================================================
+# DOCKER-BASED COMMANDS (Local Development)
+# ============================================================================
+
+# Process CSV files using Docker
 process:
 	@echo "📁 Processing CSV files..."
-	cd $(DATA_DIR) && $(PYTHON) auto_process_files.py --input ../csv_input --output ../csv_output
+	cd docker && docker-compose --profile sync run --rm sync-tool python auto_process_files.py --input /csv_input --output /csv_output
 
+# Sync to ClickHouse using Docker
 sync-to-ch:
 	@echo "🔄 Syncing to ClickHouse..."
-	cd $(DATA_DIR) && $(PYTHON) sync_to_clickhouse.py
+	cd docker && docker-compose --profile sync run --rm sync-tool python sync_to_clickhouse.py
 
+# Import inventory using Docker
+import-inventory:
+	@echo "📦 Importing inventory..."
+	cd docker && docker-compose --profile inventory run --rm inventory-import
+
+# Full pipeline using Docker
 pipeline-full: sync-to-ch dbt-build
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
@@ -259,16 +295,106 @@ pipeline-quick: dbt-build
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 
 # ============================================================================
-# FULL APPLICATION
+# SMART PIPELINE (Auto-detect files by naming convention)
 # ============================================================================
 
-app: pipeline-full ml-all
+# Smart process: Auto-detect file types and process in correct order
+smart-process:
+	@echo "🧠 Smart Processing: Auto-detecting files by naming convention..."
+	cd docker && docker-compose --profile smart run --rm smart-processor python smart_processor.py --input /csv_input --output /csv_output
+
+# Smart dry-run: Preview what files will be processed without actually processing
+smart-dry-run:
+	@echo "🔍 Smart Dry-Run: Preview processing plan..."
+	cd docker && docker-compose --profile smart run --rm smart-processor python smart_processor.py --input /csv_input --output /csv_output --dry-run
+
+# Check environment to prevent conflicts
+check-env:
+	@docker ps --format "table {% raw %}{{.Names}}{% endraw %}" 2>/dev/null | grep -q "retail_" && \
+		(echo "⚠️  WARNING: Docker containers are running!"; \
+		 echo "   Run 'make use-k3s' to switch to K3s, or"; \
+		 echo "   Run 'make down' to stop Docker first.") || true
+	@kubectl get pods -n hasu-ml --no-headers 2>/dev/null | grep -q Running && \
+		(echo "⚠️  WARNING: K3s pods are running in hasu-ml namespace!"; \
+		 echo "   Run 'make use-docker' to switch to Docker, or"; \
+		 echo "   Run 'kubectl delete namespace hasu-ml spark' to clean K3s.") || true
+
+# Smart pipeline with sync: Process files → Sync → DBT
+smart-pipeline-with-sync: check-env smart-process sync-to-ch dbt-build
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║     ✅ SMART PIPELINE (with sync) COMPLETED                  ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+
+# Full smart pipeline: Process → Sync → DBT → ML
+smart-pipeline: smart-process sync-to-ch dbt-build ml-all
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════════╗"
-	@echo "║                   ✅ APPLICATION COMPLETE! ✅                         ║"
+	@echo "║     ✅ FULL SMART PIPELINE COMPLETED!                                 ║"
+	@echo "║                                                                       ║"
+	@echo "║     Steps completed:                                                  ║"
+	@echo "║     1. 🧠 Smart file detection & processing                          ║"
+	@echo "║     2. 🔄 Sync to ClickHouse                                           ║"
+	@echo "║     3. 🏗️  DBT Build                                                   ║"
+	@echo "║     4. 🤖 ML Training & Prediction                                     ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+
+# ============================================================================
+# FULL APPLICATION (Local Development with Docker)
+# ============================================================================
+
+# ============================================================================
+# ENVIRONMENT SWITCHING (Docker ↔ K3s)
+# ============================================================================
+
+# Switch from Docker to K3s (stop Docker first)
+use-k3s:
+	@echo "🔄 Switching from Docker to K3s..."
+	@echo "📋 Stopping Docker Compose..."
+	cd docker && docker-compose down
+	@echo "✅ Docker stopped. You can now use K3s commands:"
+	@echo "   make k8s-deploy-all    - Deploy to K3s"
+	@echo "   make app-k3s           - Run pipeline on K3s"
+
+# Switch from K3s to Docker (clean K3s resources)
+use-docker:
+	@echo "🔄 Switching from K3s to Docker..."
+	@echo "⚠️  Cleaning K3s namespaces..."
+	-$(KUBECTL_CMD) delete namespace hasu-ml 2>/dev/null || true
+	-$(KUBECTL_CMD) delete namespace spark 2>/dev/null || true
+	@echo "⏳ Waiting for cleanup..."
+	@sleep 5
+	@echo "📋 Starting Docker Compose..."
+	cd docker && make up
+	@echo "✅ Docker started. You can now use:"
+	@echo "   make app    - Run pipeline locally"
+
+# ============================================================================
+# ONE-SHOT FULL APPLICATION COMMANDS
+# ============================================================================
+
+# 🚀 DEFAULT: Smart Pipeline (Recommended - Auto-detect files by naming convention)
+app: check-env smart-pipeline
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║              ✅ SMART APPLICATION COMPLETE! ✅                        ║"
+	@echo "╠══════════════════════════════════════════════════════════════════════╣"
+	@echo "║  ✅ All stages completed with Smart Processing:                      ║"
+	@echo "║     1. 🧠 Smart Detection & Processing (Products→Inventory→Sales)    ║"
+	@echo "║     2. 🔄 Sync to ClickHouse                                         ║"
+	@echo "║     3. 🏗️  DBT Build                                                 ║"
+	@echo "║     4. 🤖 ML Training                                                ║"
+	@echo "║     5. 🔮 Predictions                                                ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+
+# 🔄 Legacy: Original pipeline (manual CSV processing, no smart detection)
+app-legacy: pipeline-full ml-all
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║              ✅ LEGACY APPLICATION COMPLETE! ✅                       ║"
 	@echo "╠══════════════════════════════════════════════════════════════════════╣"
 	@echo "║  ✅ All stages completed:                                            ║"
-	@echo "║     1. 📁 CSV Processing                                             ║"
+	@echo "║     1. 📁 CSV Processing (Legacy)                                    ║"
 	@echo "║     2. 🔄 Sync to ClickHouse                                         ║"
 	@echo "║     3. 🏗️  DBT Build                                                 ║"
 	@echo "║     4. 🤖 ML Training                                                ║"
@@ -359,10 +485,6 @@ k8s-delete: kubectl-check
 # ============================================================================
 # RUN PIPELINE ON K3S
 # ============================================================================
-
-# Check if kubectl is available
-kubectl-check:
-	@which k3s kubectl > /dev/null 2>&1 || which kubectl > /dev/null 2>&1 || (echo "❌ kubectl not found. Please install kubectl or k3s." && exit 1)
 
 # Main command: Run full pipeline on K3s (Using Spark Hybrid ETL)
 app-k3s: kubectl-check

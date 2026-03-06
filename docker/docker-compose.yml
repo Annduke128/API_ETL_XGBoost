@@ -334,7 +334,7 @@ services:
   # ============================================
   sync-tool:
     build:
-      context: ./data_cleaning
+      context: ../data_cleaning
       dockerfile: Dockerfile
     image: retail-sync-tool:latest
     container_name: retail_sync_tool
@@ -360,6 +360,37 @@ services:
     # No default command - must specify script to run
 
   # ============================================
+  # Smart Processor - Auto-detect and process files by naming convention
+  # ============================================
+  smart-processor:
+    build:
+      context: ../data_cleaning
+      dockerfile: Dockerfile
+    image: retail-sync-tool:latest
+    container_name: retail_smart_processor
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      CLICKHOUSE_HOST: clickhouse
+      POSTGRES_DB: retail_db
+      POSTGRES_USER: retail_user
+      POSTGRES_PASSWORD: retail_password
+      CLICKHOUSE_DB: retail_dw
+    volumes:
+      - ../csv_input:/csv_input
+      - ../csv_output:/csv_output
+      - ../data_cleaning:/app:ro  # Mount code for development
+    depends_on:
+      - redis
+      - postgres
+      - clickhouse
+    networks:
+      - retail_network
+    profiles:
+      - smart
+    # Command được chỉ định khi chạy
+
+  # ============================================
   # Spark - Distributed ETL (Hybrid Architecture)
   # ============================================
   spark-master:
@@ -367,7 +398,7 @@ services:
     container_name: retail_spark_master
     environment:
       - SPARK_MODE=master
-      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_PORT=7078  # Changed from 7077 to avoid conflict with K8s
       - SPARK_MASTER_WEBUI_PORT=8080
       - SPARK_MASTER_LOG=/var/log/spark
       - POSTGRES_HOST=postgres
@@ -380,7 +411,7 @@ services:
       - CLICKHOUSE_PASSWORD=clickhouse_password
     ports:
       - "8090:8080"  # Spark UI (different port to avoid conflict with Airflow)
-      - "7077:7077"
+      - "7078:7078"  # Spark RPC port (changed from 7077 to avoid K8s conflict)
     volumes:
       - spark_checkpoint:/tmp/checkpoint
       - spark_shared:/shared
@@ -392,10 +423,9 @@ services:
 
   spark-worker:
     image: docker.io/bitnami/spark:latest
-    container_name: retail_spark_worker
     environment:
       - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_MASTER_URL=spark://spark-master:7078
       - SPARK_WORKER_MEMORY=4g
       - SPARK_WORKER_CORES=2
       - SPARK_WORKER_PORT=8888
@@ -418,12 +448,15 @@ services:
         reservations:
           memory: 2G
 
-  # Spark ETL Job Runner (Local Dev Mode - không cần build Scala)
+  # Spark ETL Job Runner (with PySpark ETL support)
   spark-etl:
-    image: docker.io/bitnami/spark:latest
+    build:
+      context: ../spark-etl
+      dockerfile: Dockerfile
+    image: retail-spark-etl:latest
     container_name: retail_spark_etl
     environment:
-      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_MASTER=spark://spark-master:7078
       - INPUT_PATH=/csv_input
       - OUTPUT_PATH=/shared/processed
       - MODE=full
@@ -441,6 +474,7 @@ services:
       - spark_shared:/shared
       - ../csv_input:/csv_input:ro
       - ../data_cleaning:/app:ro
+      - ../spark-etl/python_etl:/opt/spark/python_etl:ro
     working_dir: /opt/spark
     command: ["tail", "-f", "/dev/null"]  # Giữ container chạy để exec vào
     depends_on:
@@ -457,7 +491,7 @@ services:
   # ============================================
   inventory-import:
     build:
-      context: ./data_cleaning
+      context: ../data_cleaning
       dockerfile: Dockerfile
     image: retail-sync-tool:latest
     container_name: retail_inventory_import

@@ -13,7 +13,7 @@
         dbt dbt-test dbt-docs dbt-build dbt-build-staging dbt-build-marts dbt-build-full \
         dbt-deps dbt-seed dbt-list dbt-list-staging dbt-list-marts dbt-list-sources \
         dbt-preview dbt-show-source dbt-show-model dbt-validate \
-        sync-to-ch pipeline-full pipeline-quick \
+        sync-to-ch pipeline-full pipeline-quick app app-legacy smart smart-process smart-dry-run \
         ml ml-train ml-predict ml-all ml-train-fast ml-train-optimal \
         spark spark-up spark-down spark-etl spark-status \
         psql clickhouse redis \
@@ -69,6 +69,11 @@ help:
 	@echo "║    make ml-optimal      - Train with 100 trials                  ║"
 	@echo "║    make ml-all          - Train + Predict + Email                ║"
 	@echo "║    make ml-predict      - Generate predictions only              ║"
+	@echo "║                                                                  ║"
+	@echo "║  SMART PROCESSOR (Auto-detect)                                   ║"
+	@echo "║    make smart           - Auto-detect & process all files        ║"
+	@echo "║    make smart-dry-run   - Preview processing plan                ║"
+	@echo "║    make smart-process   - Process: Products→Inventory→Sales      ║"
 	@echo "║                                                                  ║"
 	@echo "║  SPARK ETL (Hybrid)                                              ║"
 	@echo "║    make spark-up        - Start Spark cluster                    ║"
@@ -282,6 +287,53 @@ pipeline-full: sync-to-ch dbt-build
 	@echo "╔══════════════════════════════════════════════════════════════╗"
 	@echo "║     ✅ BATCH SYNC PIPELINE COMPLETED SUCCESSFULLY            ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
+
+# ============================================================================
+# SMART PROCESSOR (Auto-detect by filename)
+# ============================================================================
+
+smart-process:
+	@echo "🧠 Smart Processing: Auto-detecting files..."
+	@echo "   Order: Products → Inventory → Sales → Promotions"
+	docker-compose -f $(COMPOSE_FILE) --profile smart run --rm smart-processor \
+		python smart_processor.py --input /csv_input --output /csv_output
+
+smart-dry-run:
+	@echo "🔍 Smart Dry-Run: Preview processing plan..."
+	docker-compose -f $(COMPOSE_FILE) --profile smart run --rm smart-processor \
+		python smart_processor.py --input /csv_input --output /csv_output --dry-run
+
+smart: smart-process
+
+# ============================================================================
+# ONE-SHOT FULL PIPELINE COMMANDS
+# ============================================================================
+
+# 🚀 Smart full pipeline (Recommended)
+app: smart-process sync-to-ch dbt-build ml-all
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║              ✅ SMART APPLICATION COMPLETE! ✅                        ║"
+	@echo "╠══════════════════════════════════════════════════════════════════════╣"
+	@echo "║  ✅ All stages completed with Smart Processing:                      ║"
+	@echo "║     1. 🧠 Smart Detection & Processing (Products→Inventory→Sales)    ║"
+	@echo "║     2. 🔄 Sync to ClickHouse                                         ║"
+	@echo "║     3. 🏗️  DBT Build                                                 ║"
+	@echo "║     4. 🤖 ML Training & Prediction                                   ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+
+# 🔄 Legacy full pipeline
+app-legacy: pipeline-full ml-all
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║              ✅ LEGACY APPLICATION COMPLETE! ✅                       ║"
+	@echo "╠══════════════════════════════════════════════════════════════════════╣"
+	@echo "║  ✅ All stages completed:                                            ║"
+	@echo "║     1. 📁 CSV Processing (Legacy)                                    ║"
+	@echo "║     2. 🔄 Sync to ClickHouse                                         ║"
+	@echo "║     3. 🏗️  DBT Build                                                 ║"
+	@echo "║     4. 🤖 ML Training & Prediction                                   ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
 
 # ============================================================================
 # DBT COMMANDS
