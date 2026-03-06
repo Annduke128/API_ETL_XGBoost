@@ -4,7 +4,7 @@
     engine = 'ReplacingMergeTree(updated_at)',
     order_by = ['store_id'],
     unique_key = ['store_id'],
-    tags = ['core', 'daily']
+    tags = ['marts', core', 'daily']
   )
 }}
 

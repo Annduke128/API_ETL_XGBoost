@@ -4,7 +4,7 @@
     engine = 'MergeTree()',
     order_by = ['transaction_date', 'product_code', 'branch_code'],
     partition_by = "toYYYYMM(transaction_date)",
-    tags = ['sales', 'ml', 'baseline']
+    tags = ['marts', 'sales', 'ml', 'baseline']
   )
 }}
 

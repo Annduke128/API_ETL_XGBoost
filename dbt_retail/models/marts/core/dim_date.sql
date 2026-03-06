@@ -2,6 +2,7 @@
     config(
         materialized='table',
         engine='MergeTree()',
+        tags=['marts'],
         order_by='date_key'
     )
 }}

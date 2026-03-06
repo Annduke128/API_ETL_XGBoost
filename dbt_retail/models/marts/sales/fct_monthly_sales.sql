@@ -2,6 +2,7 @@
     config(
         materialized='table',
         engine='MergeTree()',
+        tags=['marts'],
         order_by=['year_month', 'branch_id', 'product_id']
     )
 }}

@@ -1,7 +1,8 @@
 {{
     config(
         materialized='table',
-        engine='MergeTree()'
+        engine='MergeTree()',
+        tags=['marts']
     )
 }}
 
