@@ -30,7 +30,7 @@ WITH store_base AS (
         ten_chi_nhanh as branch_name,
         dia_chi as address,
         thanh_pho as city
-    FROM {{ source('retail_source', 'staging_branches') }}
+    FROM {{ ref('stg_branches') }}
 ),
 
 store_typed AS (

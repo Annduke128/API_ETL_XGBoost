@@ -25,10 +25,10 @@ branch_metrics AS (
         SUM(t.gross_profit) AS total_profit,
         AVG(t.revenue) AS avg_transaction_value,
         
-        -- Phân loại giao dịch
-        SUM(CASE WHEN t.value_tier = 'High' THEN 1 ELSE 0 END) AS high_value_transactions,
-        SUM(CASE WHEN t.value_tier = 'Medium' THEN 1 ELSE 0 END) AS medium_value_transactions,
-        SUM(CASE WHEN t.value_tier = 'Low' THEN 1 ELSE 0 END) AS low_value_transactions,
+        -- Phân loại giao dịch (todo: add value_tier calculation)
+        0 AS high_value_transactions,
+        0 AS medium_value_transactions,
+        0 AS low_value_transactions,
         
         -- Ngày hoạt động
         MIN(t.transaction_date) AS first_transaction_date,
