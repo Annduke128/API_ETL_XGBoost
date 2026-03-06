@@ -10,6 +10,23 @@ WITH transaction_details AS (
     SELECT * FROM {{ ref('stg_transaction_details') }}
 ),
 
+transactions AS (
+    SELECT 
+        transaction_id,
+        transaction_date,
+        branch_code
+    FROM {{ ref('stg_transactions') }}
+),
+
+td_with_date AS (
+    SELECT 
+        td.*,
+        t.transaction_date,
+        t.branch_code
+    FROM transaction_details td
+    JOIN transactions t ON td.transaction_id = t.transaction_id
+),
+
 daily_sales AS (
     SELECT
         td.transaction_date AS transaction_date,
@@ -19,8 +36,8 @@ daily_sales AS (
         td.product_code AS product_code,
         p.product_id AS product_id,
         
-        -- Branch (lấy từ transaction)
-        t.branch_code AS branch_code,
+        -- Branch
+        td.branch_code AS branch_code,
         b.branch_id AS branch_id,
         
         -- Số liệu
@@ -32,7 +49,7 @@ daily_sales AS (
         
         -- Metrics
         AVG(td.selling_price) AS avg_selling_price,
-        AVG(td.profit) AS avg_profit_per_unit,
+        AVG(td.line_profit) AS avg_profit_per_unit,
         
         -- Tỷ lệ
         CASE 
@@ -44,17 +61,16 @@ daily_sales AS (
         -- Timestamp
         now() AS etl_timestamp
         
-    FROM transaction_details td
+    FROM td_with_date td
     LEFT JOIN {{ ref('dim_product') }} p ON td.product_code = p.product_code
-    LEFT JOIN {{ ref('stg_transactions') }} t ON td.transaction_id = t.transaction_id
-    LEFT JOIN {{ ref('dim_branch') }} b ON t.branch_code = b.branch_code
+    LEFT JOIN {{ ref('dim_branch') }} b ON td.branch_code = b.branch_code
     
     GROUP BY 
-        transaction_date,
-        product_code,
-        product_id,
-        branch_code,
-        branch_id
+        td.transaction_date,
+        td.product_code,
+        p.product_id,
+        td.branch_code,
+        b.branch_id
 )
 
 SELECT * FROM daily_sales
