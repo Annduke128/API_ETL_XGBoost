@@ -2,13 +2,18 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including Java for PySpark
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     unixodbc-dev \
     libgssapi-krb5-2 \
+    default-jdk \
     && rm -rf /var/lib/apt/lists/*
+
+# Set JAVA_HOME for PySpark
+ENV JAVA_HOME=/usr/lib/jvm/default-java
+ENV PATH=$PATH:$JAVA_HOME/bin
 
 # Install Python dependencies
 COPY requirements.txt .
