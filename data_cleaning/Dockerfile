@@ -15,6 +15,13 @@ RUN apt-get update && apt-get install -y \
 ENV JAVA_HOME=/usr/lib/jvm/default-java
 ENV PATH=$PATH:$JAVA_HOME/bin
 
+# Download PostgreSQL JDBC driver for PySpark
+RUN mkdir -p /opt/spark/jars && \
+    wget -q -O /opt/spark/jars/postgresql-42.6.0.jar \
+    https://jdbc.postgresql.org/download/postgresql-42.6.0.jar
+
+ENV SPARK_CLASSPATH=/opt/spark/jars/postgresql-42.6.0.jar
+
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
