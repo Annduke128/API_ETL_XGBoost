@@ -347,19 +347,45 @@ kubectl get events -n hasu-ml --sort-by='.lastTimestamp'
 
 Hệ thống tự động import CSV **hàng ngày lúc 2h sáng** thông qua Airflow DAG.
 
-### Import thủ công
+### Import thủ công (⚡ Spark Hybrid - Khuyến nghị)
 
 **Docker:**
 ```bash
 cd docker
-make sync-to-ch
+
+# Khởi động Spark cluster (lần đầu)
+make spark-up
+
+# Chạy Spark ETL (CSV → PostgreSQL → ClickHouse)
+make spark-etl
+
+# Hoặc chạy full pipeline
+make pipeline-spark
 ```
 
 **K3s:**
 ```bash
-make k3s-sync
-# Hoặc
-kubectl apply -f k8s/05-ml-pipeline/job-sync.yaml -n hasu-ml
+# Deploy Spark cluster (lần đầu)
+make spark-deploy
+
+# Chạy Spark ETL
+make k3s-spark
+
+# Hoặc chạy full pipeline
+make app-k3s  # Sử dụng Spark ETL by default
+```
+
+### Import thủ công (Legacy - Deprecated)
+
+> ⚠️ **Deprecated:** Sử dụng Pandas, chậm hơn Spark 5-10x
+
+```bash
+# Docker (Legacy)
+cd docker
+make sync-to-ch
+
+# K3s (Legacy)
+make k3s-sync-legacy
 ```
 
 ---
@@ -503,12 +529,16 @@ kubectl get secret dockerhub-credentials -n hasu-ml
 # Development (Docker)
 make app                # Run full pipeline locally
 
-# Production (K3s)
-make app-k3s            # Run full pipeline on K3s
-make k3s-sync           # Sync job only
+# Production (K3s) - Spark Hybrid ETL
+make app-k3s            # Run full pipeline on K3s (uses Spark ETL)
+make k3s-spark          # ⚡ Spark ETL only (CSV → PostgreSQL → ClickHouse)
+make spark-deploy       # Deploy Spark cluster
 make k3s-dbt            # DBT build only
 make k3s-ml-train       # ML training only
 make k3s-ml-predict     # ML prediction only
+
+# Production (K3s) - Legacy (Deprecated)
+make k3s-sync-legacy    # ⚠️ Legacy sync - use k3s-spark instead
 
 # K8s Management
 make k8s-deploy         # Deploy/Update K3s resources
@@ -516,6 +546,22 @@ make k8s-deploy-all     # Full deployment
 make k8s-status         # Check status
 make k8s-logs           # View logs
 make k8s-delete         # Delete all resources
+```
+
+### Spark ETL Commands
+
+```bash
+# Docker
+cd docker
+make spark-up           # Start Spark cluster
+make spark-etl          # Run Spark Hybrid ETL
+make spark-status       # Check Spark status
+make spark-down         # Stop Spark cluster
+
+# K3s
+make spark-deploy       # Deploy Spark to K3s
+make spark-status       # Check Spark cluster
+make spark-delete       # Remove Spark cluster
 ```
 
 ---
@@ -562,6 +608,8 @@ Tự động gửi email cho các sự kiện:
 | [AGENTS.md](AGENTS.md) | Hướng dẫn cho AI coding agents |
 | [docker/README.md](docker/README.md) | Chi tiết Docker Compose |
 | [k8s/README.md](k8s/README.md) | Chi tiết K3s deployment |
+| [docs/SPARK_HYBRID_GUIDE.md](docs/SPARK_HYBRID_GUIDE.md) | Hướng dẫn Spark Hybrid ETL |
+| [docs/MIGRATION_ETL_TO_SPARK.md](docs/MIGRATION_ETL_TO_SPARK.md) | Migration từ ETL cũ sang Spark |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Kiến trúc hệ thống chi tiết |
 
 ---
@@ -570,4 +618,4 @@ Tự động gửi email cho các sự kiện:
 
 MIT License
 
-**Last Updated:** 2026-03-03
+**Last Updated:** 2026-03-06
