@@ -35,8 +35,8 @@ renamed AS (
         s.gia_von AS cost_price,
         (s.gia_ban * s.so_luong) AS line_revenue,
         (s.gia_von * s.so_luong) AS line_cost,
-        s.loi_nhuan AS line_profit,
-        s.tong_loi_nhuan AS total_line_profit,
+        toFloat64OrNull(s.loi_nhuan) AS line_profit,
+        toFloat64OrNull(s.tong_loi_nhuan) AS total_line_profit,
         s.created_at
     FROM source s
     LEFT JOIN products_ref p ON s.product_id = p.product_id
