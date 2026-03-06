@@ -208,20 +208,20 @@ def run_processor(processor_name, file_path=None, extra_args=None, working_dir='
     """Chạy processor script (Python hoặc Spark)"""
     
     if use_spark and 'spark' in processor_name:
-        # Run with spark-submit via docker exec
+        # Run PySpark script via docker exec
         cmd = [
-            'docker', 'exec', 'retail_spark_etl',
-            '/opt/bitnami/spark/bin/spark-submit',
-            '--master', 'spark://spark-master:7078',
-            '--deploy-mode', 'client',
-            '--driver-memory', '2g',
-            '--executor-memory', '4g',
-            '--executor-cores', '2',
-            f'/opt/spark/python_etl/{processor_name}'
+            'docker', 'exec', '-e', 'POSTGRES_HOST=postgres',
+            '-e', 'POSTGRES_PORT=5432',
+            '-e', 'POSTGRES_DB=retail_db',
+            '-e', 'POSTGRES_USER=retail_user',
+            '-e', 'POSTGRES_PASSWORD=retail_password',
+            '-e', 'CLICKHOUSE_HOST=clickhouse',
+            'retail_spark_etl',
+            'python', f'/opt/spark/python_etl/{processor_name}'
         ]
         if file_path:
             cmd.append(str(file_path))
-        print(f"   🔥 Chạy Spark: {processor_name}")
+        print(f"   🔥 Chạy PySpark: {processor_name}")
     else:
         # Run with Python
         cmd = ['python', processor_name]

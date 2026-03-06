@@ -390,65 +390,10 @@ services:
       - smart
     # Command được chỉ định khi chạy
 
-  # ============================================
-  # Spark - Distributed ETL (Hybrid Architecture)
-  # ============================================
-  spark-master:
-    image: docker.io/bitnami/spark:latest
-    container_name: retail_spark_master
-    environment:
-      - SPARK_MODE=master
-      - SPARK_MASTER_PORT=7078  # Changed from 7077 to avoid conflict with K8s
-      - SPARK_MASTER_WEBUI_PORT=8080
-      - SPARK_MASTER_LOG=/var/log/spark
-      - POSTGRES_HOST=postgres
-      - POSTGRES_DB=retail_db
-      - POSTGRES_USER=retail_user
-      - POSTGRES_PASSWORD=retail_password
-      - CLICKHOUSE_HOST=clickhouse
-      - CLICKHOUSE_DB=retail_dw
-      - CLICKHOUSE_USER=default
-      - CLICKHOUSE_PASSWORD=clickhouse_password
-    ports:
-      - "8090:8080"  # Spark UI (different port to avoid conflict with Airflow)
-      - "7078:7078"  # Spark RPC port (changed from 7077 to avoid K8s conflict)
-    volumes:
-      - spark_checkpoint:/tmp/checkpoint
-      - spark_shared:/shared
-      - ../spark-etl/python_udfs:/opt/spark/python_udfs:ro
-    networks:
-      - retail_network
-    profiles:
-      - spark
 
-  spark-worker:
-    image: docker.io/bitnami/spark:latest
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7078
-      - SPARK_WORKER_MEMORY=4g
-      - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_PORT=8888
-      - SPARK_WORKER_WEBUI_PORT=8081
-    depends_on:
-      - spark-master
-    volumes:
-      - spark_checkpoint:/tmp/checkpoint
-      - spark_shared:/shared
-      - ../csv_input:/csv_input:ro
-    networks:
-      - retail_network
-    profiles:
-      - spark
-    deploy:
-      replicas: 2
-      resources:
-        limits:
-          memory: 6G
-        reservations:
-          memory: 2G
-
-  # Spark ETL Job Runner (with PySpark ETL support)
+  # ============================================
+  # PySpark ETL Runner (Standalone - No cluster needed)
+  # ============================================
   spark-etl:
     build:
       context: ../spark-etl
@@ -456,7 +401,6 @@ services:
     image: retail-spark-etl:latest
     container_name: retail_spark_etl
     environment:
-      - SPARK_MASTER=spark://spark-master:7078
       - INPUT_PATH=/csv_input
       - OUTPUT_PATH=/shared/processed
       - MODE=full
@@ -475,10 +419,10 @@ services:
       - ../csv_input:/csv_input:ro
       - ../data_cleaning:/app:ro
       - ../spark-etl/python_etl:/opt/spark/python_etl:ro
+      - ../spark-etl/python_udfs:/opt/spark/python_udfs:ro
     working_dir: /opt/spark
-    command: ["tail", "-f", "/dev/null"]  # Giữ container chạy để exec vào
+    command: ["tail", "-f", "/dev/null"]
     depends_on:
-      - spark-master
       - postgres
       - clickhouse
     networks:
