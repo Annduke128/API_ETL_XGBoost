@@ -61,10 +61,10 @@ models:
           - unique
           - not_null
       - name: quantity
-        description: "Số lượng"
-        tests:
-          - dbt_utils.accepted_range:
-              min_value: 0
+        description: "Số lượng (có thể âm nếu là trả hàng)"
+        # tests:
+        #   - dbt_utils.accepted_range:
+        #       min_value: 0  # Disabled: có thể có giá trị âm do trả hàng
       - name: selling_price
         description: "Giá bán"
         tests:

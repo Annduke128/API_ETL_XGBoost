@@ -12,13 +12,6 @@
 -- Dùng để train ML model cho baseline demand prediction
 -- Loại bỏ các sản phẩm category 'Khuyến mại%' để tránh làm méo pattern
 
-WITH promotion_products AS (
-    SELECT product_code
-    FROM {{ ref('dim_product') }}
-    WHERE lower(category_level_1) LIKE '%khuyến mại%' 
-       OR lower(category_level_1) LIKE '%khuyen mai%'
-)
-
 SELECT 
     f.transaction_date,
     f.date_key,
@@ -41,5 +34,9 @@ SELECT
     'regular' AS sale_type
 
 FROM {{ ref('fct_daily_sales') }} f
-LEFT JOIN promotion_products p ON f.product_code = p.product_code
-WHERE p.product_code = ''  -- Chỉ lấy sản phẩm KHÔNG khuyến mại (ClickHouse trả về '' thay vì NULL)
+WHERE f.product_code NOT IN (
+    SELECT product_code 
+    FROM {{ ref('dim_product') }} 
+    WHERE lower(category_level_1) LIKE '%khuyến mại%' 
+       OR lower(category_level_1) LIKE '%khuyen mai%'
+)

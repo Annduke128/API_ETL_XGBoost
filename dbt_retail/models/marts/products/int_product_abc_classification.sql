@@ -29,8 +29,8 @@ WITH product_revenue AS (
         p.category_level_1,
         p.category_level_2,
         p.category_level_3,
-        COALESCE(SUM(f.daily_revenue), 0) as total_revenue,
-        COALESCE(SUM(f.daily_quantity), 0) as total_quantity,
+        COALESCE(SUM(f.gross_revenue), 0) as total_revenue,
+        COALESCE(SUM(f.quantity_sold), 0) as total_quantity,
         COUNT(DISTINCT f.transaction_date) as active_days
     FROM {{ source('retail_source', 'staging_products') }} p
     LEFT JOIN {{ ref('fct_daily_sales') }} f 
