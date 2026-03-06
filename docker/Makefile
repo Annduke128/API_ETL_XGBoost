@@ -103,8 +103,15 @@ ENV_FILE := .env
 # Khởi động infrastructure cơ bản
 up:
 	@if [ ! -f $(ENV_FILE) ]; then \
-		echo "⚠️  Creating .env from .env.example..."; \
-		cp .env.example .env; \
+		if [ -f ../.env ]; then \
+			echo "⚠️  Copying .env from parent directory..."; \
+			cp ../.env .env; \
+		elif [ -f .env.example ]; then \
+			echo "⚠️  Creating .env from .env.example..."; \
+			cp .env.example .env; \
+		else \
+			echo "⚠️  Warning: No .env file found. Using default values..."; \
+		fi \
 	fi
 	@echo "🚀 Starting infrastructure services..."
 	docker-compose -f $(COMPOSE_FILE) up -d redis postgres clickhouse
@@ -150,8 +157,15 @@ up-spark:
 # Khởi động tất cả services
 up-all:
 	@if [ ! -f $(ENV_FILE) ]; then \
-		echo "⚠️  Creating .env from .env.example..."; \
-		cp .env.example .env; \
+		if [ -f ../.env ]; then \
+			echo "⚠️  Copying .env from parent directory..."; \
+			cp ../.env .env; \
+		elif [ -f .env.example ]; then \
+			echo "⚠️  Creating .env from .env.example..."; \
+			cp .env.example .env; \
+		else \
+			echo "⚠️  Warning: No .env file found. Using default values..."; \
+		fi \
 	fi
 	@echo "🚀 Starting ALL services..."
 	docker-compose -f $(COMPOSE_FILE) --profile ml --profile sync up -d
