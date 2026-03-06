@@ -47,18 +47,30 @@ store_enriched AS (
     SELECT 
         s.store_id,
         s.store_type_code,
-        st.type_name_vn as store_type_name,
-        st.type_code_2 as peer_group,
-        st.description as store_type_description,
-        st.typical_area_m2,
-        st.target_customer,
+        -- Hard-coded store type info (temporary - seed not working)
+        CASE s.store_type_code
+            WHEN 'KPDT' THEN 'Cửa hàng khu phố đô thị'
+            WHEN 'KCC' THEN 'Cửa hàng khu chung cư'
+            WHEN 'KCN' THEN 'Cửa hàng khu công nghiệp'
+            WHEN 'CTT' THEN 'Cửa hàng chợ truyền thống'
+            WHEN 'KVNT' THEN 'Cửa hàng khu vực nông thôn'
+        END as store_type_name,
+        CASE s.store_type_code
+            WHEN 'KPDT' THEN 'UP'
+            WHEN 'KCC' THEN 'AP'
+            WHEN 'KCN' THEN 'IZ'
+            WHEN 'CTT' THEN 'TM'
+            WHEN 'KVNT' THEN 'RL'
+        END as peer_group,
+        'Default store type description' as store_type_description,
+        '0' as typical_area_m2,
+        'General customers' as target_customer,
         s.branch_code,
         s.branch_name as store_name,
         s.address,
         s.city,
         
         -- Default values cho các cột khác
-        -- TODO: Cập nhật khi có dữ liệu thực tế
         NULL as store_area_m2,
         NULL as selling_area_m2,
         NULL as storage_area_m2,
@@ -68,8 +80,6 @@ store_enriched AS (
         now() as created_at,
         now() as updated_at
     FROM store_typed s
-    LEFT JOIN {{ source('retail_dw', 'store_types') }} st 
-        ON s.store_type_code = st.type_code
 )
 
 SELECT * FROM store_enriched

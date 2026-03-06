@@ -393,7 +393,7 @@ dbt-build-marts: dbt-seed
 dbt-build: dbt-seed
 	@echo "🔧 Building ALL models..."
 	docker-compose -f $(COMPOSE_FILE) run --rm $(DBT_ENV) dbt dbt build \
-		--select staging,marts $(DBT_TARGET)
+		--select models/staging models/marts $(DBT_TARGET)
 
 dbt-build-full: dbt-seed
 	@echo "🔄 Full refresh build..."

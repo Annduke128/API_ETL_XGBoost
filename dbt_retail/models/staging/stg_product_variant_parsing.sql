@@ -83,6 +83,9 @@ SELECT
     -- Clean Name (đã xóa weight và packaging, giữ lại tất cả còn lại)
     trim(REGEXP_REPLACE(clean_name_dirty, '\s+', ' ')) as clean_name,
     
+    -- Product Family (same as clean_name - used for grouping variants)
+    trim(REGEXP_REPLACE(clean_name_dirty, '\s+', ' ')) as product_family,
+    
     -- Packaging Type
     packaging_type,
     
