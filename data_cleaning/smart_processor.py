@@ -208,17 +208,9 @@ def run_processor(processor_name, file_path=None, extra_args=None, working_dir='
     """Chạy processor script (Python hoặc Spark)"""
     
     if use_spark and 'spark' in processor_name:
-        # Run PySpark script via docker exec
-        cmd = [
-            'docker', 'exec', '-e', 'POSTGRES_HOST=postgres',
-            '-e', 'POSTGRES_PORT=5432',
-            '-e', 'POSTGRES_DB=retail_db',
-            '-e', 'POSTGRES_USER=retail_user',
-            '-e', 'POSTGRES_PASSWORD=retail_password',
-            '-e', 'CLICKHOUSE_HOST=clickhouse',
-            'retail_spark_etl',
-            'python', f'/opt/spark/python_etl/{processor_name}'
-        ]
+        # Mount spark-etl scripts vào container và chạy trực tiếp
+        spark_script = f'/app/spark_etl/{processor_name}'
+        cmd = ['python', spark_script]
         if file_path:
             cmd.append(str(file_path))
         print(f"   🔥 Chạy PySpark: {processor_name}")
