@@ -2414,29 +2414,65 @@ class SalesForecaster:
             logger.warning(f"⚠️ Không thể load tồn kho hiện tại: {e}")
             current_stock_map = {}
         
-        # 3. Lấy số lượng bán 4 tuần gần nhất từ ClickHouse (để ưu tiên)
-        logger.info("📊 Đang tính số lượng bán 4 tuần gần nhất...")
+        # 3. Lấy số lượng bán THEO TUẦN (4 tuần gần nhất) để tính tồn kho tối ưu
+        logger.info("📊 Đang tính tồn kho tối ưu từ dữ liệu 4 tuần...")
         try:
-            sales_query = f"""
+            # Query dữ liệu bán theo tuần
+            weekly_sales_query = f"""
             SELECT 
                 product_code as ma_hang,
-                SUM(quantity_sold) as total_sold_4weeks,
-                SUM(gross_revenue) as total_revenue_4weeks
+                toWeek(transaction_date) as week_num,
+                SUM(quantity_sold) as weekly_sold,
+                SUM(gross_revenue) as weekly_revenue
             FROM retail_dw.fct_regular_sales
             WHERE product_code IN ('{products_str}')
               AND transaction_date >= today() - 28
-            GROUP BY product_code
+            GROUP BY product_code, toWeek(transaction_date)
+            ORDER BY product_code, week_num
             """
-            sales_df = self.ch.query(sales_query)
+            weekly_df = self.ch.query(weekly_sales_query)
+            
+            # Tính tồn kho tối ưu cho mỗi sản phẩm
+            # Công thức: tồn kho tối ưu = median(lượng bán tuần + tồn kho nhỏ nhất × 0.75) qua 4 tuần
+            optimal_inventory_map = {}
             sales_map = {}
-            for _, row in sales_df.iterrows():
-                sales_map[row['ma_hang']] = {
-                    'quantity_sold': row['total_sold_4weeks'] or 0,
-                    'revenue': row['total_revenue_4weeks'] or 0
-                }
-            logger.info(f"✅ Loaded 4-week sales data for {len(sales_map)} products")
+            
+            for ma_hang in product_list:
+                # Lấy dữ liệu 4 tuần của sản phẩm này
+                product_weekly = weekly_df[weekly_df['ma_hang'] == ma_hang]
+                
+                if len(product_weekly) > 0:
+                    # Lấy tồn kho nhỏ nhất từ database
+                    ton_nho_nhat = product_info.get(ma_hang, {}).get('ton_nho_nhat', 0)
+                    
+                    # Tính tồn kho tối ưu cho mỗi tuần = bán tuần đó + tồn kho nhỏ nhất × 0.75
+                    weekly_optimal = []
+                    for _, week_row in product_weekly.iterrows():
+                        weekly_sold = week_row['weekly_sold'] or 0
+                        optimal_week = weekly_sold + (ton_nho_nhat * 0.75)
+                        weekly_optimal.append(optimal_week)
+                    
+                    # Lấy trung vị (median) của 4 tuần
+                    import numpy as np
+                    optimal_inventory = np.median(weekly_optimal) if weekly_optimal else 0
+                    
+                    optimal_inventory_map[ma_hang] = round(optimal_inventory)
+                    
+                    # Lưu thêm tổng doanh thu 4 tuần cho ưu tiên
+                    sales_map[ma_hang] = {
+                        'quantity_sold': product_weekly['weekly_sold'].sum() or 0,
+                        'revenue': product_weekly['weekly_revenue'].sum() or 0,
+                        'weekly_data': weekly_optimal
+                    }
+                else:
+                    optimal_inventory_map[ma_hang] = 0
+                    sales_map[ma_hang] = {'quantity_sold': 0, 'revenue': 0, 'weekly_data': []}
+            
+            logger.info(f"✅ Calculated optimal inventory for {len(optimal_inventory_map)} products")
+            logger.info(f"   Formula: median(weekly_sales + ton_nho_nhat × 0.75) over 4 weeks")
         except Exception as e:
-            logger.warning(f"⚠️ Không thể load dữ liệu bán hàng: {e}")
+            logger.warning(f"⚠️ Không thể tính tồn kho tối ưu: {e}")
+            optimal_inventory_map = {}
             sales_map = {}
         
         # 4. Tổng hợp dự báo theo sản phẩm (7 ngày)
@@ -2454,6 +2490,8 @@ class SalesForecaster:
             lambda x: product_info.get(x, {}).get('ton_nho_nhat', 0))
         product_summary['ton_hien_tai'] = product_summary['ma_hang'].map(
             lambda x: current_stock_map.get(x, 0))
+        product_summary['ton_kho_toi_uu'] = product_summary['ma_hang'].map(
+            lambda x: optimal_inventory_map.get(x, 0))  # Tồn kho tối ưu mới
         product_summary['da_ban_4tuan'] = product_summary['ma_hang'].map(
             lambda x: sales_map.get(x, {}).get('quantity_sold', 0))
         product_summary['doanh_thu_4tuan'] = product_summary['ma_hang'].map(
@@ -2462,9 +2500,10 @@ class SalesForecaster:
             lambda x: product_info.get(x, {}).get('margin', 0))
         
         # 6. Tính LƯỢNG CẦN NHẬP
-        # Công thức: MAX(Dự báo 7 ngày, Tồn nhỏ nhất) - Tồn kho hiện tại
+        # Công thức mới: MAX(Dự báo 7 ngày, Tồn kho tối ưu) - Tồn kho hiện tại
+        # Trong đó: Tồn kho tối ưu = median(lượng bán tuần + tồn kho nhỏ nhất × 0.75) qua 4 tuần
         product_summary['luong_can_nhap'] = (
-            product_summary[['forecast_7d', 'ton_nho_nhat']].max(axis=1) 
+            product_summary[['forecast_7d', 'ton_kho_toi_uu']].max(axis=1) 
             - product_summary['ton_hien_tai']
         ).clip(lower=0)  # Không nhập số âm
         
@@ -2486,6 +2525,8 @@ class SalesForecaster:
         
         logger.info(f"\n📊 Danh sách {len(top_products)} sản phẩm cần đặt hàng:")
         logger.info(f"   - Tổng lượng cần nhập: {top_products['luong_can_nhap'].sum():,.0f} units")
+        logger.info(f"   - Tồn kho tối ưu TB: {top_products['ton_kho_toi_uu'].mean():,.0f} units")
+        logger.info(f"   - Công thức: median(weekly_sales + ton_nho_nhat × 0.75) over 4 weeks")
         logger.info(f"   - Sản phẩm HIGH MARGIN (>20%): {top_products['is_high_margin'].sum()}")
         logger.info(f"   - Sản phẩm HIGH VALUE (top 20%): {top_products['is_high_value'].sum()}")
         
@@ -2515,6 +2556,7 @@ class SalesForecaster:
                 'ma_vach': row['ma_vach'],
                 'ten_san_pham': row['ten_hang_day_du'] or row['ten_san_pham'],
                 'luong_can_nhap': round(row['luong_can_nhap']),
+                'ton_kho_toi_uu': round(row['ton_kho_toi_uu']),  # Tồn kho tối ưu mới
                 'ton_nho_nhat': round(row['ton_nho_nhat']),
                 'ton_hien_tai': round(row['ton_hien_tai']),
                 'du_bao_7ngay': round(row['forecast_7d']),
@@ -2542,13 +2584,13 @@ class SalesForecaster:
         
         # Hiển thị top 15
         logger.info("\n🔥 Top 15 sản phẩm ưu tiên đặt hàng:")
-        logger.info(f"{'STT':<4} {'Mã hàng':<12} {'Tên sản phẩm':<30} {'Cần nhập':<10} {'Tồn hiện tại':<12} {'Ưu tiên':<15} {'Ghi chú'}")
+        logger.info(f"{'STT':<4} {'Mã hàng':<10} {'Tên sản phẩm':<28} {'Cần nhập':<10} {'Tối ưu':<10} {'Hiện tại':<10} {'Ưu tiên':<12} {'Ghi chú'}")
         logger.info("-" * 130)
         for _, row in po_df.head(15).iterrows():
-            name_short = row['ten_san_pham'][:28] if len(str(row['ten_san_pham'])) > 28 else row['ten_san_pham']
-            logger.info(f"{row['stt']:<4} {row['ma_hang']:<12} {name_short:<30} "
-                       f"{row['luong_can_nhap']:>8,} {row['ton_hien_tai']:>10,} "
-                       f"{row['uu_tien']:<15} {row['ghi_chu']}")
+            name_short = row['ten_san_pham'][:26] if len(str(row['ten_san_pham'])) > 26 else row['ten_san_pham']
+            logger.info(f"{row['stt']:<4} {row['ma_hang']:<10} {name_short:<28} "
+                       f"{row['luong_can_nhap']:>8,} {row['ton_kho_toi_uu']:>8,} {row['ton_hien_tai']:>8,} "
+                       f"{row['uu_tien']:<12} {row['ghi_chu']}")
         
         return output_path
     
