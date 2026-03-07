@@ -72,6 +72,7 @@ def import_products(file_path):
         'nhom_hang_cap_3': df['nhom_hang_cap_3'],
         'gia_von_mac_dinh': df['Giá vốn'].apply(clean_numeric),
         'gia_ban_mac_dinh': df['Giá bán'].apply(clean_numeric),
+        'ton_nho_nhat': df['Tồn nhỏ nhất'].apply(clean_numeric) if 'Tồn nhỏ nhất' in df.columns else 0.0,
     })
     
     # Loại bỏ duplicate
