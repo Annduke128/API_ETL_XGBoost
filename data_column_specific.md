@@ -52,6 +52,52 @@ Excel Files (3 loại)
 
 ### 1. SOURCE TABLES (PostgreSQL)
 
+#### `ml_forecasts` (Dự báo ML) ⭐ **NEW**
+Lưu kết quả dự báo từ XGBoost models
+
+| Cột | Kiểu dữ liệu | Mô tả |
+|-----|--------------|-------|
+| id | SERIAL PK | ID tự động |
+| forecast_date | DATE | Ngày dự báo |
+| chi_nhanh | VARCHAR(100) | Chi nhánh |
+| ma_hang | VARCHAR(50) | Mã hàng |
+| ten_san_pham | VARCHAR(500) | Tên sản phẩm |
+| nhom_hang_cap_1 | VARCHAR(200) | Nhóm hàng cấp 1 |
+| nhom_hang_cap_2 | VARCHAR(200) | Nhóm hàng cấp 2 |
+| abc_class | VARCHAR(10) | Phân loại ABC (A/B/C) |
+| predicted_quantity | FLOAT | Số lượng dự báo (adjusted) |
+| predicted_quantity_raw | FLOAT | Số lượng dự báo (raw từ model) |
+| predicted_revenue | DECIMAL(15,2) | Doanh thu dự báo |
+| predicted_profit_margin | FLOAT | Biên lợi nhuận dự báo |
+| confidence_lower | FLOAT | Ngưỡng tin cậy dưới (95% CI) |
+| confidence_upper | FLOAT | Ngưỡng tin cậy trên (95% CI) |
+| created_at | TIMESTAMP | Thởi gian tạo |
+
+**Indexes:**
+- `idx_forecasts_date` ON forecast_date
+- `idx_forecasts_product` ON ma_hang
+- `idx_forecasts_abc` ON abc_class
+
+#### `ml_model_metrics` (Metrics Model) ⭐ **NEW**
+Lưu metrics và thông tin training của các ML models
+
+| Cột | Kiểu dữ liệu | Mô tả |
+|-----|--------------|-------|
+| id | SERIAL PK | ID tự động |
+| model_name | VARCHAR(100) | Tên model (product_quantity, category_trend) |
+| training_date | TIMESTAMP | Ngày training |
+| best_mape | FLOAT | Mean Absolute Percentage Error tốt nhất |
+| n_trials | INTEGER | Số lần thử nghiệm (Optuna trials) |
+| best_params | TEXT | Parameters tốt nhất (JSON format) |
+| feature_importance | TEXT | Feature importance (JSON format) |
+| created_at | TIMESTAMP | Thởi gian tạo |
+
+**Indexes:**
+- `idx_model_metrics_name` ON model_name
+- `idx_model_metrics_date` ON training_date
+
+---
+
 #### `products` (16,025 dòng)
 Dữ liệu sản phẩm từ Excel DanhSachSanPham
 
@@ -625,6 +671,8 @@ required_purchase = max(forecast_demand, min_stock_level) - current_stock
 
 | Ngày | Thay đổi |
 |------|----------|
+| 2026-03-07 | **Thêm `05_ml_tables.sql`** với schema đầy đủ cho ml_forecasts và ml_model_metrics |
+| 2026-03-07 | **Cập nhật `00_run_all.sql`** để chạy đủ 5 file SQL initialization |
 | 2026-03-07 | **Thêm `ton_nho_nhat`** vào bảng `products` từ DanhSachSanPham |
 | 2026-03-07 | **Cập nhật logic purchase order**: MAX(Dự báo, Tồn nhỏ nhất) - Tồn hiện tại |
 | 2026-03-07 | **Sắp xếp ưu tiên**: Bán nhiều → Doanh thu → Margin |

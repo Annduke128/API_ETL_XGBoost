@@ -233,6 +233,52 @@
 
 ---
 
+## 🗄️ PostgreSQL Schema Structure
+
+```
+init/postgres/
+├── 00_run_all.sql          # Orchestrator - chạy tất cả các file
+├── 01_init_schema.sql      # Base schema (products, transactions)
+├── 02_inventory_schema.sql # Inventory schema definitions
+├── 03_inventory_tables.sql # Inventory tables (inventory_transactions)
+├── 04_sales_tables.sql     # Sales tables (transactions, transaction_details)
+└── 05_ml_tables.sql        # ⭐ NEW: ML tables (ml_forecasts, ml_model_metrics)
+```
+
+### ML Tables Schema
+
+#### `ml_forecasts` - Lưu kết quả dự báo
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| id | SERIAL PK | ID tự động |
+| forecast_date | DATE | Ngày dự báo |
+| chi_nhanh | VARCHAR(100) | Chi nhánh |
+| ma_hang | VARCHAR(50) | Mã hàng |
+| ten_san_pham | VARCHAR(500) | Tên sản phẩm |
+| nhom_hang_cap_1 | VARCHAR(200) | Nhóm hàng cấp 1 |
+| nhom_hang_cap_2 | VARCHAR(200) | Nhóm hàng cấp 2 |
+| abc_class | VARCHAR(10) | Phân loại ABC |
+| predicted_quantity | FLOAT | Số lượng dự báo (adjusted) |
+| predicted_quantity_raw | FLOAT | Số lượng dự báo (raw) |
+| predicted_revenue | DECIMAL(15,2) | Doanh thu dự báo |
+| predicted_profit_margin | FLOAT | Biên lợi nhuận dự báo |
+| confidence_lower | FLOAT | Ngưỡng tin cậy dưới |
+| confidence_upper | FLOAT | Ngưỡng tin cậy trên |
+| created_at | TIMESTAMP | Thởi gian tạo |
+
+#### `ml_model_metrics` - Lưu metrics model
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| id | SERIAL PK | ID tự động |
+| model_name | VARCHAR(100) | Tên model |
+| training_date | TIMESTAMP | Ngày training |
+| best_mape | FLOAT | MAPE tốt nhất |
+| n_trials | INTEGER | Số lần thử nghiệm |
+| best_params | TEXT | Params tốt nhất (JSON) |
+| feature_importance | TEXT | Feature importance (JSON) |
+
+---
+
 ## 🔑 Key Design Decisions
 
 ### 1. Daily Data từ Excel
@@ -390,6 +436,8 @@ docker exec -i retail_clickhouse clickhouse-client -q "
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-03-07 | **Thêm `05_ml_tables.sql`** với schema đầy đủ cho ml_forecasts | AI Assistant |
+| 2026-03-07 | **Cập nhật `00_run_all.sql`** để chạy đủ 5 file SQL | AI Assistant |
 | 2026-03-07 | **Thêm `ton_nho_nhat`** từ DanhSachSanPham vào PostgreSQL | AI Assistant |
 | 2026-03-07 | **Cập nhật purchase order logic**: MAX(forecast, min_stock) - current_stock | AI Assistant |
 | 2026-03-07 | **50 sản phẩm** dự báo theo doanh thu (ABC chỉ để phân loại) | AI Assistant |

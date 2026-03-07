@@ -15,6 +15,12 @@
 \echo '3. Creating inventory tables (03_inventory_tables.sql)...'
 \i /docker-entrypoint-initdb.d/03_inventory_tables.sql
 
+\echo '4. Creating sales tables (04_sales_tables.sql)...'
+\i /docker-entrypoint-initdb.d/04_sales_tables.sql
+
+\echo '5. Creating ML tables (05_ml_tables.sql)...'
+\i /docker-entrypoint-initdb.d/05_ml_tables.sql
+
 \echo '========================================'
 \echo 'Schema initialization completed!'
 \echo '========================================'
