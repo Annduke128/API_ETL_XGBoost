@@ -257,17 +257,45 @@ class SalesForecaster:
             df['thuong_hieu'] = df['thuong_hieu'].fillna('Unknown')
             df['abc_class'] = df['abc_class'].fillna('C')
             
+            # VALIDATION: Chỉ giữ lại records có dữ liệu bán thực tế
+            original_count = len(df)
+            
+            # Loại bỏ records với quantity <= 0 hoặc NULL
+            df = df[df['daily_quantity'].notna()]
+            df = df[df['daily_quantity'] > 0]
+            
+            # Loại bỏ records với revenue <= 0 (double check)
+            df = df[df['daily_revenue'].notna()]
+            df = df[df['daily_revenue'] > 0]
+            
+            filtered_count = len(df)
+            removed_count = original_count - filtered_count
+            
+            if removed_count > 0:
+                logger.warning(f"⚠️  Đã loại bỏ {removed_count:,} records ({removed_count/original_count*100:.1f}%) do không có dữ liệu bán hàng (quantity=0 hoặc NULL)")
+            
+            if filtered_count == 0:
+                logger.error("❌ Không có dữ liệu bán hàng hợp lệ sau khi lọc!")
+                return pd.DataFrame()
+            
             # Log thông tin về seasonal factors nếu có
             if 'seasonal_factor' in df.columns:
                 avg_sf = df['seasonal_factor'].mean()
                 peak_days = df['is_peak_day'].sum()
-                logger.info(f"✅ Đã load {len(df):,} records từ fct_regular_sales + dynamic seasonal")
+                logger.info(f"✅ Đã load {len(df):,} records bán hàng thực tế từ fct_regular_sales + dynamic seasonal")
                 logger.info(f"   🎄 Avg seasonal factor: {avg_sf:.2f}, Peak days: {peak_days}")
             else:
-                logger.info(f"✅ Đã load {len(df):,} records từ fct_regular_sales (no seasonal)")
+                logger.info(f"✅ Đã load {len(df):,} records bán hàng thực tế từ fct_regular_sales (no seasonal)")
+            
+            # Thống kê chi tiết
+            total_quantity = df['daily_quantity'].sum()
+            total_revenue = df['daily_revenue'].sum()
+            avg_quantity = df['daily_quantity'].mean()
             
             logger.info(f"   📊 Date range: {df['ngay'].min()} to {df['ngay'].max()}")
             logger.info(f"   📊 Products: {df['ma_hang'].nunique()}, Branches: {df['chi_nhanh'].nunique()}")
+            logger.info(f"   📊 Total quantity: {total_quantity:,.0f}, Total revenue: {total_revenue:,.0f}")
+            logger.info(f"   📊 Avg daily quantity: {avg_quantity:.2f}")
             
             # Áp dụng Winsorization để giảm ảnh hưởng outliers
             if apply_winsorize and len(df) > 0:
@@ -1576,6 +1604,17 @@ class SalesForecaster:
         history_df = self.ch.query(history_query)
         history_df['ngay'] = pd.to_datetime(history_df['ngay'])
         
+        # VALIDATION: Chỉ giữ lại records có dữ liệu bán thực tế
+        original_count = len(history_df)
+        history_df = history_df[history_df['daily_quantity'].notna()]
+        history_df = history_df[history_df['daily_quantity'] > 0]
+        history_df = history_df[history_df['daily_revenue'].notna()]
+        history_df = history_df[history_df['daily_revenue'] > 0]
+        
+        filtered_count = len(history_df)
+        if filtered_count < original_count:
+            logger.warning(f"⚠️  Đã loại bỏ {original_count - filtered_count:,} records không có dữ liệu bán hàng")
+        
         # Fill NA cho các cột mới
         if 'thuong_hieu' in history_df.columns:
             history_df['thuong_hieu'] = history_df['thuong_hieu'].fillna('Unknown')
@@ -1584,10 +1623,10 @@ class SalesForecaster:
         history_df['nhom_hang_cap_1'] = history_df['nhom_hang_cap_1'].fillna('Unknown')
         history_df['nhom_hang_cap_2'] = history_df['nhom_hang_cap_2'].fillna('Unknown')
         
-        logger.info(f"✅ Đã tải {len(history_df):,} rows dữ liệu lịch sử từ fct_regular_sales")
+        logger.info(f"✅ Đã tải {len(history_df):,} rows dữ liệu bán hàng thực tế từ fct_regular_sales")
         
         if len(history_df) == 0:
-            logger.error("❌ Không có dữ liệu lịch sử cho các sản phẩm được chọn!")
+            logger.error("❌ Không có dữ liệu bán hàng hợp lệ cho các sản phẩm được chọn!")
             return pd.DataFrame()
         
         # BƯỚC 3: Tạo template cho future dates cho mỗi (chi_nhanh, ma_hang)
@@ -1982,7 +2021,16 @@ class SalesForecaster:
         try:
             history_df = self.ch.query(history_query)
             history_df['ngay'] = pd.to_datetime(history_df['ngay'])
-            logger.info(f"✅ Loaded {len(history_df)} historical category records")
+            
+            # VALIDATION: Chỉ giữ lại records có dữ liệu bán thực tế
+            original_count = len(history_df)
+            history_df = history_df[history_df['daily_quantity'] > 0]
+            history_df = history_df[history_df['daily_revenue'] > 0]
+            
+            if len(history_df) < original_count:
+                logger.warning(f"⚠️  Đã loại bỏ {original_count - len(history_df)} category-records không có dữ liệu bán hàng")
+            
+            logger.info(f"✅ Loaded {len(history_df)} historical category records with actual sales")
         except Exception as e:
             logger.error(f"❌ Lỗi khi query category history: {e}")
             return pd.DataFrame()
