@@ -123,30 +123,46 @@ def import_products(spark, file_path):
         "driver": "org.postgresql.Driver"
     }
     
-    # Truncate and load
-    df.write \
-        .mode("overwrite") \
-        .option("truncate", "true") \
-        .jdbc(pg_url, "products", properties=pg_props)
+    # Write to PostgreSQL - delete existing data first to avoid FK constraint issues
+    # Then insert new data using overwrite mode (which drops and recreates table)
+    # But since products has FK references, we use delete + insert approach via pandas
+    print("💾 Writing to PostgreSQL (via pandas to handle FK constraints)...")
+    
+    # Convert Spark DF to Pandas and use psycopg2 for UPSERT
+    import psycopg2
+    from psycopg2.extras import execute_values
+    
+    pandas_df = df.toPandas()
+    
+    conn = psycopg2.connect(
+        host=os.getenv('POSTGRES_HOST', 'postgres'),
+        database=os.getenv('POSTGRES_DB', 'retail_db'),
+        user=os.getenv('POSTGRES_USER', 'retail_user'),
+        password=os.getenv('POSTGRES_PASSWORD', 'retail_password')
+    )
+    
+    try:
+        with conn.cursor() as cur:
+            # Use UPSERT (INSERT ON CONFLICT UPDATE)
+            values = [tuple(row) for row in pandas_df.values]
+            columns = list(pandas_df.columns)
+            
+            # Build UPSERT query
+            update_cols = [c for c in columns if c != 'ma_hang']
+            update_stmt = ', '.join([f"{c} = EXCLUDED.{c}" for c in update_cols])
+            
+            query = f"""
+                INSERT INTO products ({', '.join(columns)}) 
+                VALUES %s 
+                ON CONFLICT (ma_hang) DO UPDATE SET {update_stmt}
+            """
+            
+            execute_values(cur, query, values)
+            conn.commit()
+    finally:
+        conn.close()
     
     print(f"✅ Imported {count:,} products to PostgreSQL")
-    
-    # Write to ClickHouse
-    print("💾 Writing to ClickHouse staging...")
-    try:
-        ch_url = f"jdbc:clickhouse://{os.getenv('CLICKHOUSE_HOST', 'clickhouse')}:8123/{os.getenv('CLICKHOUSE_DB', 'retail_dw')}"
-        ch_props = {
-            "driver": "com.clickhouse.jdbc.ClickHouseDriver"
-        }
-        
-        df.write \
-            .mode("overwrite") \
-            .option("createTableOptions", "ENGINE = MergeTree() ORDER BY ma_hang") \
-            .jdbc(ch_url, "staging_products", properties=ch_props)
-        
-        print(f"✅ Imported {count:,} products to ClickHouse")
-    except Exception as e:
-        print(f"⚠️  ClickHouse write skipped: {e}")
     
     return count
 
@@ -168,6 +184,7 @@ def main():
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
         .config("spark.sql.adaptive.skewJoin.enabled", "true") \
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
+        .config("spark.jars", "/opt/spark/jars/postgresql-42.6.0.jar,/opt/spark/jars/clickhouse-jdbc-0.6.0-all.jar") \
         .getOrCreate()
     
     spark.sparkContext.setLogLevel("WARN")

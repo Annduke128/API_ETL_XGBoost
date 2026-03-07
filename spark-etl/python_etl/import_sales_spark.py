@@ -7,6 +7,7 @@ Parallel processing with Spark
 import os
 import sys
 import re
+import unicodedata
 from datetime import datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -36,10 +37,15 @@ def clean_numeric(value):
         return 0.0
 
 
+def normalize_unicode(s):
+    """Normalize unicode string to NFC form"""
+    return unicodedata.normalize('NFC', s)
+
 def find_column(columns, pattern):
-    """Find column name containing pattern"""
+    """Find column name containing pattern (with unicode normalization)"""
+    pattern_norm = normalize_unicode(pattern.lower())
     for c in columns:
-        if pattern.lower() in c.lower():
+        if pattern_norm in normalize_unicode(c.lower()):
             return c
     return None
 
@@ -66,7 +72,10 @@ def import_sales(spark, file_path):
     cols = list(pandas_df.columns)
     col_ma_gd = find_column(cols, 'Mã giao dịch')
     col_chi_nhanh = find_column(cols, 'Chi nhánh')
-    col_thoi_gian = find_column(cols, 'Thờ')
+    # Ưu tiên cột 'Thởi gian (theo giao dịch)' có datetime đầy đủ
+    col_thoi_gian = find_column(cols, 'giao dịch)')  # Tìm cột chứa 'giao dịch)' 
+    if not col_thoi_gian:
+        col_thoi_gian = find_column(cols, 'Thởi gian')
     col_tong_tien = find_column(cols, 'Tổng tiền hàng')
     col_giam_gia = find_column(cols, 'Giảm giá')
     col_doanh_thu = find_column(cols, 'Doanh thu')
@@ -136,14 +145,23 @@ def import_sales(spark, file_path):
     
     with engine.connect() as conn:
         for idx, row in tx_pd.iterrows():
-            # Parse datetime
-            thoi_gian_str = row.get('thoi_gian_raw', '') if 'thoi_gian_raw' in row else ''
-            if isinstance(thoi_gian_str, str) and thoi_gian_str:
-                try:
-                    thoi_gian = pd.to_datetime(thoi_gian_str, dayfirst=True)
-                except:
+            # Parse datetime - hỗ trợ cả string và datetime object
+            thoi_gian_val = row.get('thoi_gian_raw', None) if 'thoi_gian_raw' in row else None
+            
+            if pd.notna(thoi_gian_val):
+                # Nếu là string, parse nó
+                if isinstance(thoi_gian_val, str):
+                    try:
+                        thoi_gian = pd.to_datetime(thoi_gian_val, dayfirst=True)
+                    except:
+                        thoi_gian = datetime.combine(datetime.strptime(ngay_bao_cao, '%Y-%m-%d'), datetime.min.time())
+                # Nếu đã là datetime, dùng luôn
+                elif isinstance(thoi_gian_val, (datetime, pd.Timestamp)):
+                    thoi_gian = thoi_gian_val
+                else:
                     thoi_gian = datetime.combine(datetime.strptime(ngay_bao_cao, '%Y-%m-%d'), datetime.min.time())
             else:
+                # Fallback về ngày từ filename nếu không có thởi gian
                 thoi_gian = datetime.combine(datetime.strptime(ngay_bao_cao, '%Y-%m-%d'), datetime.min.time())
             
             # Insert transaction

@@ -118,21 +118,69 @@ def import_inventory(spark, file_path):
     
     df = df.select([c for c in final_cols if c in df.columns])
     
-    # Write to PostgreSQL (parallel)
-    print("💾 Writing to PostgreSQL (parallel)...")
+    # Write to PostgreSQL - use UPSERT to handle duplicates
+    print("💾 Writing to PostgreSQL (via pandas with UPSERT)...")
     
-    pg_url = f"jdbc:postgresql://{os.getenv('POSTGRES_HOST', 'postgres')}:5432/{os.getenv('POSTGRES_DB', 'retail_db')}"
-    pg_props = {
-        "user": os.getenv("POSTGRES_USER", "retail_user"),
-        "password": os.getenv("POSTGRES_PASSWORD", "retail_password"),
-        "driver": "org.postgresql.Driver"
-    }
+    import psycopg2
+    from psycopg2.extras import execute_values
     
-    df.write \
-        .mode("append") \
-        .jdbc(pg_url, "inventory_transactions", properties=pg_props)
+    pandas_df = df.toPandas()
     
-    print(f"✅ Imported {count:,} inventory records")
+    # Deduplicate based on the unique constraint columns
+    pandas_df = pandas_df.drop_duplicates(subset=['ma_vach', 'chi_nhanh', 'ngay_bao_cao'], keep='first')
+    
+    conn = psycopg2.connect(
+        host=os.getenv('POSTGRES_HOST', 'postgres'),
+        database=os.getenv('POSTGRES_DB', 'retail_db'),
+        user=os.getenv('POSTGRES_USER', 'retail_user'),
+        password=os.getenv('POSTGRES_PASSWORD', 'retail_password')
+    )
+    
+    try:
+        with conn.cursor() as cur:
+            values = [tuple(row) for row in pandas_df.values]
+            columns = list(pandas_df.columns)
+            
+            # Build UPSERT query for inventory_transactions
+            # Unique constraint: (ma_vach, chi_nhanh, ngay_bao_cao)
+            update_cols = [c for c in columns if c not in ['ma_vach', 'chi_nhanh', 'ngay_bao_cao']]
+            update_stmt = ', '.join([f"{c} = EXCLUDED.{c}" for c in update_cols])
+            
+            query = f"""
+                INSERT INTO inventory_transactions ({', '.join(columns)}) 
+                VALUES %s 
+                ON CONFLICT (ma_vach, chi_nhanh, ngay_bao_cao) DO UPDATE SET {update_stmt}
+            """
+            
+            execute_values(cur, query, values)
+            conn.commit()
+    finally:
+        conn.close()
+    
+    print(f"✅ Imported {count:,} inventory records to PostgreSQL")
+    
+    # Write to ClickHouse for ML processing
+    print("💾 Writing to ClickHouse staging for ML...")
+    try:
+        ch_host = os.getenv('CLICKHOUSE_HOST', 'clickhouse')
+        ch_db = os.getenv('CLICKHOUSE_DB', 'retail_dw')
+        ch_user = os.getenv('CLICKHOUSE_USER', 'default')
+        ch_pass = os.getenv('CLICKHOUSE_PASSWORD', 'clickhouse_password')
+        
+        ch_url = f"jdbc:clickhouse://{ch_host}:8123/{ch_db}?user={ch_user}&password={ch_pass}"
+        ch_props = {
+            "driver": "com.clickhouse.jdbc.ClickHouseDriver"
+        }
+        
+        # Write to ClickHouse - overwrite mode to handle duplicates
+        df.write \
+            .mode("overwrite") \
+            .option("createTableOptions", "ENGINE = MergeTree() ORDER BY (ngay_bao_cao, ma_vach, chi_nhanh)") \
+            .jdbc(ch_url, "staging_inventory_transactions", properties=ch_props)
+        
+        print(f"✅ Imported {count:,} inventory records to ClickHouse for ML")
+    except Exception as e:
+        print(f"⚠️  ClickHouse write skipped: {e}")
     
     # Summary
     print("\n" + "=" * 70)
@@ -160,6 +208,7 @@ def main():
         .appName("ImportInventory-Spark") \
         .config("spark.sql.adaptive.enabled", "true") \
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+        .config("spark.jars", "/opt/spark/jars/postgresql-42.6.0.jar,/opt/spark/jars/clickhouse-jdbc-0.6.0-all.jar") \
         .getOrCreate()
     
     spark.sparkContext.setLogLevel("WARN")

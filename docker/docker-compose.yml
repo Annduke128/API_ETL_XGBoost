@@ -376,6 +376,8 @@ services:
       POSTGRES_USER: retail_user
       POSTGRES_PASSWORD: retail_password
       CLICKHOUSE_DB: retail_dw
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse_password
     volumes:
       - ../csv_input:/csv_input
       - ../csv_output:/csv_output

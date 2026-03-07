@@ -9,18 +9,21 @@ RUN apt-get update && apt-get install -y \
     unixodbc-dev \
     libgssapi-krb5-2 \
     default-jdk \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Set JAVA_HOME for PySpark
 ENV JAVA_HOME=/usr/lib/jvm/default-java
 ENV PATH=$PATH:$JAVA_HOME/bin
 
-# Download PostgreSQL JDBC driver for PySpark
+# Download PostgreSQL and ClickHouse JDBC drivers for PySpark
 RUN mkdir -p /opt/spark/jars && \
     wget -q -O /opt/spark/jars/postgresql-42.6.0.jar \
-    https://jdbc.postgresql.org/download/postgresql-42.6.0.jar
+    https://jdbc.postgresql.org/download/postgresql-42.6.0.jar && \
+    wget -q -O /opt/spark/jars/clickhouse-jdbc-0.6.0-all.jar \
+    https://repo1.maven.org/maven2/com/clickhouse/clickhouse-jdbc/0.6.0/clickhouse-jdbc-0.6.0-all.jar
 
-ENV SPARK_CLASSPATH=/opt/spark/jars/postgresql-42.6.0.jar
+ENV SPARK_CLASSPATH=/opt/spark/jars/postgresql-42.6.0.jar:/opt/spark/jars/clickhouse-jdbc-0.6.0-all.jar
 
 # Install Python dependencies
 COPY requirements.txt .

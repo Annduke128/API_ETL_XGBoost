@@ -112,6 +112,14 @@ seeds:
         type_name_vn: varchar(100)
         type_name_en: varchar(100)
         description: varchar(500)
+    
+    peak_days:
+      +column_types:
+        month: Int8
+        day: Int8
+        peak_reason: varchar(50)
+        peak_level: Int8
+        impact_days: Int16
         typical_area_m2: varchar(20)
         target_customer: varchar(100)
 

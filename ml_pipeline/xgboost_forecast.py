@@ -143,6 +143,7 @@ class SalesForecaster:
             ) as is_holiday,
             -- DYNAMIC SEASONAL FACTORS (từ int_dynamic_seasonal_factor)
             COALESCE(s.is_peak_day, 0) as is_peak_day,
+            COALESCE(s.peak_level, 0) as peak_level,
             COALESCE(s.seasonal_factor, 1.0) as seasonal_factor,
             COALESCE(s.revenue_factor, 1.0) as revenue_factor,
             COALESCE(s.quantity_factor, 1.0) as quantity_factor,
@@ -342,7 +343,7 @@ class SalesForecaster:
                 'day_of_week', 'day_of_month', 'month', 'week_of_year', 'is_weekend',
                 'is_month_start', 'is_month_end', 'is_holiday',
                 'daily_revenue', 'daily_quantity', 'daily_profit', 'transaction_count',
-                'is_peak_day', 'seasonal_factor', 'revenue_factor', 'quantity_factor', 'peak_reason'
+                'is_peak_day', 'peak_level', 'seasonal_factor', 'revenue_factor', 'quantity_factor', 'peak_reason'
             ])
     
     def create_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -433,6 +434,10 @@ class SalesForecaster:
         if 'abc_class' in df.columns:
             df['abc_encoded'] = pd.Categorical(df['abc_class'].fillna('C')).codes.astype(int)
             df.drop(columns=['abc_class'], inplace=True)  # Xoá cột gốc
+        
+        # Xoá peak_reason (string) nếu có - seasonal factor đã đủ thông tin
+        if 'peak_reason' in df.columns:
+            df.drop(columns=['peak_reason'], inplace=True)
         
         # Clean up any remaining inf or NaN in numeric columns
         numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -1406,6 +1411,7 @@ class SalesForecaster:
                 p.abc_class,
                 -- DYNAMIC SEASONAL FACTORS (từ int_dynamic_seasonal_factor)
                 COALESCE(s.is_peak_day, 0) as is_peak_day,
+                COALESCE(s.peak_level, 0) as peak_level,
                 COALESCE(s.seasonal_factor, 1.0) as seasonal_factor,
                 COALESCE(s.revenue_factor, 1.0) as revenue_factor,
                 COALESCE(s.quantity_factor, 1.0) as quantity_factor,
