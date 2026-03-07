@@ -1204,6 +1204,36 @@ class SalesForecaster:
         logger.info(f"   📊 Unique products: {df['ma_hang'].nunique()}")
         logger.info(f"   📊 Date range: {df['ngay'].min()} to {df['ngay'].max()}")
         
+        # VALIDATION: Kiểm tra đủ dữ liệu cho lag features
+        n_unique_days = df['ngay'].nunique()
+        date_range_days = (df['ngay'].max() - df['ngay'].min()).days + 1
+        
+        logger.info(f"   📊 Unique days in data: {n_unique_days}")
+        logger.info(f"   📊 Calendar days in range: {date_range_days}")
+        
+        # Xác định lag features khả dụng
+        available_lags = [lag for lag in [1, 7, 14, 30] if lag < n_unique_days]
+        logger.info(f"   📊 Available lag features: {available_lags}")
+        
+        # Cảnh báo nếu thiếu dữ liệu cho lag quan trọng
+        if n_unique_days < 31:
+            logger.warning(f"   ⚠️  Chỉ có {n_unique_days} ngày dữ liệu - lag_30 sẽ không khả dụng")
+        if n_unique_days < 15:
+            logger.warning(f"   ⚠️  Chỉ có {n_unique_days} ngày dữ liệu - lag_14 sẽ không khả dụng")
+        if n_unique_days < 8:
+            logger.warning(f"   ⚠️  Chỉ có {n_unique_days} ngày dữ liệu - lag_7 sẽ không khả dụng")
+        if n_unique_days < 2:
+            logger.error(f"   ❌ Chỉ có {n_unique_days} ngày dữ liệu - Không đủ cho lag_1!")
+            return self.metrics
+        
+        # Kiểm tra continuity của time-series (có ngày bị thiếu không)
+        daily_counts = df.groupby('ngay').size()
+        if len(daily_counts) < date_range_days * 0.8:  # Thiếu >20% ngày
+            missing_days = date_range_days - len(daily_counts)
+            logger.warning(f"   ⚠️  Thiếu {missing_days} ngày dữ liệu ({missing_days/date_range_days*100:.1f}%)")
+        else:
+            logger.info(f"   ✅ Time-series continuity: Good ({len(daily_counts)}/{date_range_days} days)")
+        
         # Feature engineering
         logger.info("🔧 Creating features...")
         df_features = self.create_features(df)
@@ -1221,6 +1251,16 @@ class SalesForecaster:
         valid_targets = df_features['daily_quantity'].notna().sum()
         logger.info(f"✅ Created {len(self.feature_cols)} features")
         logger.info(f"   📊 Valid targets (non-NA): {valid_targets:,} / {len(df_features):,}")
+        
+        # VALIDATION: Kiểm tra lag features sau khi tạo
+        lag_cols = [col for col in df_features.columns if col.startswith('lag_') and col.endswith('_quantity')]
+        if lag_cols:
+            logger.info(f"   📊 Lag features created: {lag_cols}")
+            for lag_col in lag_cols:
+                non_zero = (df_features[lag_col] != 0).sum()
+                logger.info(f"      - {lag_col}: {non_zero:,} non-zero values ({non_zero/len(df_features)*100:.1f}%)")
+        else:
+            logger.warning(f"   ⚠️  No lag features found! Check data availability.")
         
         if valid_targets == 0:
             logger.error("❌ Không có target hợp lệ để training!")

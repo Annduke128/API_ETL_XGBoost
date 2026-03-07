@@ -434,6 +434,16 @@ dbt build --select staging,marts
 
 ## 🤖 Chạy ML Models
 
+### Yêu cầu dữ liệu cho Training
+
+| Mức độ | Ngày dữ liệu | Lag features | Độ tin cậy |
+|--------|--------------|--------------|------------|
+| **Minimum** | 2+ ngày | lag_1 | ⚠️ LOW |
+| **Recommended** | 31+ ngày | lag_1, lag_7, lag_14, lag_30 | ✅ HIGH |
+| **Optimal** | 90+ ngày | Đầy đủ + rolling ổn định | 🌟 HIGH |
+
+> **Lưu ý:** Nếu dữ liệu < 31 ngày, lag_30 sẽ không được tạo. Nếu < 2 ngày, training sẽ fail.
+
 ### Training với Optuna Tuning
 
 **Docker:**
@@ -459,6 +469,35 @@ make k3s-ml-predict     # Generate predictions
 | `learning_rate` | 0.01-0.3 | Tốc độ học |
 | `subsample` | 0.6-1.0 | Sampling ratio |
 | `colsample_bytree` | 0.6-1.0 | Feature sampling |
+
+### Data Validation trong Training
+
+Training pipeline tự động kiểm tra:
+
+```
+✅ Loaded 150,420 rows
+   📊 Unique days in data: 75
+   📊 Available lag features: [1, 7, 14, 30]
+   ✅ Time-series continuity: Good (75/75 days)
+
+🔧 Creating features...
+✅ Created 25 features
+   📊 Lag features created: ['lag_1_quantity', 'lag_7_quantity', 'lag_14_quantity', 'lag_30_quantity']
+      - lag_1_quantity: 142,380 non-zero values (94.6%)
+      - lag_7_quantity: 138,950 non-zero values (92.3%)
+      - lag_14_quantity: 132,500 non-zero values (88.0%)
+      - lag_30_quantity: 115,200 non-zero values (76.5%)
+```
+
+### Cold Start Handling
+
+Sản phẩm có < 2 ngày dữ liệu sẽ được xử lý bằng **category median fallback**:
+
+```python
+predicted_qty = category_median * seasonal_factor / 7
+```
+
+Xem chi tiết: [ml_pipeline/ML_EXPLAIN.md](ml_pipeline/ML_EXPLAIN.md)
 
 ---
 
@@ -566,6 +605,67 @@ make spark-delete       # Remove Spark cluster
 
 ---
 
+## 📊 ML Pipeline Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     ML PIPELINE FLOW                            │
+└─────────────────────────────────────────────────────────────────┘
+
+Data Loading          Validation           Feature Engineering
+     │                      │                         │
+     ▼                      ▼                         ▼
+┌─────────┐          ┌─────────────┐          ┌─────────────────┐
+│ fct_    │          │ • quantity>0│          │ • Time features │
+│regular_ │    →     │ • revenue>0 │    →     │ • Lag features  │
+│  sales  │          │ • >=2 days  │          │ • Rolling stats │
+└─────────┘          │ • continuity│          │ • Seasonal      │
+                     └─────────────┘          └─────────────────┘
+                                                          │
+                       Training                           │
+                          │                               │
+     ┌────────────────────┼────────────────────┐         │
+     ▼                    ▼                    ▼         │
+┌──────────┐      ┌──────────────┐      ┌──────────┐     │
+│ Model 1  │      │   Model 2    │      │  Optuna  │◄────┘
+│ Product  │      │  Category    │      │  Tuning  │
+│  MdAPE   │      │   MAPE       │      │          │
+└──────────┘      └──────────────┘      └──────────┘
+     │                    │
+     └────────────────────┘
+                │
+                ▼
+     ┌────────────────────┐
+     │    Prediction      │
+     │  • Top 50 ABC      │
+     │  • 7-day forecast  │
+     │  • Cold start      │
+     │    handling        │
+     └────────────────────┘
+                │
+                ▼
+     ┌────────────────────┐
+     │      Output        │
+     │  • ClickHouse      │
+     │  • PostgreSQL      │
+     │  • CSV Export      │
+     │  • Email Report    │
+     └────────────────────┘
+```
+
+### Data Quality Gates
+
+| Stage | Check | Threshold | Fail Action |
+|-------|-------|-----------|-------------|
+| Load | Records loaded | > 0 | Stop |
+| Validate | Unique days | >= 2 | Stop |
+| Validate | Continuity | >= 80% | Warning |
+| Feature | Lag features | >= 1 | Stop |
+| Train | Valid targets | > 0 | Stop |
+| Predict | Forecast count | > 0 | Alert |
+
+---
+
 ## 🏪 Hệ thống Phân loại Cửa hàng
 
 ### 5 Loại cửa hàng
@@ -593,8 +693,22 @@ make spark-delete       # Remove Spark cluster
 ## 📧 Email Notification System
 
 Tự động gửi email cho các sự kiện:
-- ML Training Success/Failure
-- ML Prediction Success/Failure
+- ML Training Success/Failure với data quality metrics
+- ML Prediction Success/Failure với forecast summary
+- Data quality alerts (cold start, missing data, zero predictions)
+
+**Nội dung email training report:**
+- Model performance metrics (MdAPE, MAPE)
+- Data quality indicators (cold start %, missing dates, zero predictions)
+- Feature importance top 5
+- Comparison giữa Model 1 và Model 2
+- Alerts với màu sắc (🔴 Error, 🟠 Warning, 🔵 Info)
+
+**Nội dung email forecast report:**
+- Tổng số sản phẩm được dự báo
+- So sánh với tuần trước (last_week_sales)
+- Top sản phẩm tăng/giảm mạnh nhất
+- ABC classification distribution
 
 **Docker:** Cấu hình trong `docker/.env`
 **K3s:** Cấu hình trong GitHub Secrets (auto-inject vào K8s secrets)
@@ -618,4 +732,4 @@ Tự động gửi email cho các sự kiện:
 
 MIT License
 
-**Last Updated:** 2026-03-06
+**Last Updated:** 2026-03-07

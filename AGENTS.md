@@ -482,6 +482,60 @@ git push origin main
 
 ## 🧠 ML Pipeline Architecture
 
+### Data Requirements & Lag Features
+
+```
+Training Data Requirements:
+├── Minimum: 2 days (lag_1 only)
+├── Recommended: 31+ days (lag_1, lag_7, lag_14, lag_30)
+└── Optimal: 90+ days (full features + stable rolling stats)
+```
+
+| Lag Feature | Required Days | Created By |
+|-------------|---------------|------------|
+| `lag_1_quantity` | 2+ | `shift(1)` by (branch, product) |
+| `lag_7_quantity` | 8+ | `shift(7)` by (branch, product) |
+| `lag_14_quantity` | 15+ | `shift(14)` by (branch, product) |
+| `lag_30_quantity` | 31+ | `shift(30)` by (branch, product) |
+
+**Adaptive behavior:** Số lượng lag features tự động điều chỉnh dựa trên số ngày dữ liệu có sẵn.
+
+### Data Validation Pipeline
+
+```python
+# 1. Load từ fct_regular_sales (không khuyến mại)
+df = load_historical_data(days=0)
+
+# 2. Validation: Chỉ giữ records có dữ liệu bán thực tế
+df = df[df['daily_quantity'] > 0]
+df = df[df['daily_revenue'] > 0]
+
+# 3. Feature engineering với adaptive lag
+df_features = create_features(df)
+# → Tự động chọn lag features phù hợp
+
+# 4. Training với TimeSeriesSplit
+model = train_model(df_features, target='daily_quantity')
+```
+
+### Cold Start Handling
+
+```python
+if len(product_history) < 2:
+    # Fallback: Category median + seasonal adjustment
+    predicted_qty = category_median * seasonal_factor / 7
+else:
+    # Normal: XGBoost model prediction
+    predicted_qty = model.predict(X)
+```
+
+| Mức độ dữ liệu | Số ngày | Phương pháp | Độ tin cậy |
+|----------------|---------|-------------|------------|
+| Cold start | < 2 | Category median | LOW |
+| Warm up | 2-14 | Model với limited lags | MEDIUM |
+| Stable | 14-30 | Full model features | HIGH |
+| Mature | > 30 | Full model + all lags | HIGH |
+
 ### Batch Query Optimization
 
 ```python
@@ -659,4 +713,67 @@ docker-compose --profile spark build spark-etl
 
 ---
 
-**Last Updated**: 2026-03-06 (Added PySpark ETL)
+### ML Pipeline Workflow Summary
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    ML PIPELINE WORKFLOW                       │
+└──────────────────────────────────────────────────────────────┘
+
+1. DATA LOADING (fct_regular_sales)
+   ├── Query historical data (default: all days)
+   ├── JOIN dim_product (category, brand, abc_class)
+   └── JOIN int_dynamic_seasonal_factor (seasonal factors)
+
+2. DATA VALIDATION
+   ├── Filter: quantity > 0 AND revenue > 0
+   ├── Check: unique days >= 2 (minimum for lag_1)
+   ├── Check: time-series continuity
+   └── Log: data quality metrics
+
+3. FEATURE ENGINEERING (create_features)
+   ├── Time-based: day_of_week, month, is_weekend, is_holiday
+   ├── Lag features (adaptive):
+   │   ├── lag_1:  requires >= 2 days
+   │   ├── lag_7:  requires >= 8 days
+   │   ├── lag_14: requires >= 15 days
+   │   └── lag_30: requires >= 31 days
+   ├── Rolling: mean/std 7, 14, 30 days
+   ├── Seasonal: is_peak_day, seasonal_factor
+   └── Categorical encoding: branch, category, brand
+
+4. TRAINING (train_all_models)
+   ├── Model 1: Product-level (MdAPE metric)
+   │   └── Target: daily_quantity
+   ├── Model 2: Category-level (MAPE metric)
+   │   └── Target: aggregated category quantity
+   └── Hyperparameter tuning: Optuna (default 50 trials)
+
+5. PREDICTION (predict_next_week)
+   ├── Select products (default: Top 50 ABC)
+   ├── Load 60-day history (batch query)
+   ├── For each product:
+   │   ├── IF < 2 days history: cold start (category median)
+   │   └── ELSE: XGBoost prediction
+   └── Generate 7-day forecast
+
+6. OUTPUT
+   ├── Save to ClickHouse (ml_forecasts)
+   ├── Save to PostgreSQL (ml_forecasts)
+   ├── Export CSV (purchase_orders)
+   └── Send email report
+```
+
+**Key Code Files:**
+- `ml_pipeline/xgboost_forecast.py` - Main ML pipeline
+- `ml_pipeline/email_notifier.py` - Email reporting
+
+**Important Notes:**
+- Lag features use pandas shift() grouped by (branch, product)
+- Cold start threshold: < 2 days of history
+- Training fails if < 2 days of data (not enough for lag_1)
+- Always validate data quality before training
+
+---
+
+**Last Updated**: 2026-03-07 (Added ML workflow documentation)

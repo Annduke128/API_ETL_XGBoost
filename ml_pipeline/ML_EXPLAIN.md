@@ -42,18 +42,36 @@ Output: 7-day forecast per product
 **Tinh chỉnh**: Thêm/bớt holidays sẽ ảnh hưởng đến dự báo ngày đặc biệt.
 
 #### 2. Lag Features (Historical values)
-| Feature | Mô tả |
-|---------|-------|
-| `lag_1_quantity` | Số lượng bán hôm qua |
-| `lag_7_quantity` | Số lượng bán cách đây 1 tuần |
-| `lag_14_quantity` | Số lượng bán cách đây 2 tuần |
-| `lag_30_quantity` | Số lượng bán cách đây 1 tháng |
+| Feature | Mô tả | Minimum Data Required |
+|---------|-------|----------------------|
+| `lag_1_quantity` | Số lượng bán hôm qua | 2 days |
+| `lag_7_quantity` | Số lượng bán cách đây 1 tuần | 8 days |
+| `lag_14_quantity` | Số lượng bán cách đây 2 tuần | 15 days |
+| `lag_30_quantity` | Số lượng bán cách đây 1 tháng | 31 days |
 
-**Adaptive behavior**: Nếu dữ liệu < 30 ngày, tự động bỏ lag 30.
+**Adaptive behavior**: 
+- Nếu dữ liệu < 30 ngày, tự động bỏ lag 30
+- Nếu dữ liệu < 15 ngày, tự động bỏ lag 14
+- Nếu dữ liệu < 8 ngày, tự động bỏ lag 7
+- Nếu dữ liệu < 2 ngày, training sẽ fail (không đủ cho lag_1)
+
+**Data Requirements for Training**:
+```
+Minimum: 2 days (chỉ có lag_1)
+Recommended: 31+ days (đầy đủ lag_1, lag_7, lag_14, lag_30)
+Optimal: 90+ days (lag features + rolling statistics ổn định)
+```
+
+**How lag features are created**:
+```python
+# Sử dụng pandas shift() theo nhóm (chi_nhanh, ma_hang)
+df[f'lag_{lag}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'].shift(lag)
+```
 
 **Tinh chỉnh**: 
 - Thêm lag 3 ngày → capture short-term trends
 - Bỏ lag 30 → khi dữ liệu ngắn, tránh overfitting
+- **Cold start handling**: Sản phẩm < 2 ngày dữ liệu sẽ dùng category median thay vì model prediction
 
 #### 3. Rolling Statistics
 | Feature | Window | Ý nghĩa |
@@ -263,7 +281,39 @@ df = df[df['daily_revenue'] > 0]
 | Có ngày = 0 records | 🔴 Nghiêm trọng | Kiểm tra ETL pipeline |
 | Phân phối không đều | 🟡 Cảnh báo | Review data collection |
 
-### 3. Cold Start Handling
+### 3. Lag Feature Validation
+
+**Kiểm tra sau khi tạo features:**
+
+```python
+# Training log sẽ hiển thị:
+📊 Available lag features: [1, 7, 14, 30]  # hoặc ít hơn tùy data
+📊 Lag features created: ['lag_1_quantity', 'lag_7_quantity', ...]
+   - lag_1_quantity: 15,420 non-zero values (94.5%)
+   - lag_7_quantity: 14,890 non-zero values (91.2%)
+   - lag_14_quantity: 13,250 non-zero values (81.1%)
+   - lag_30_quantity: 10,150 non-zero values (62.1%)
+```
+
+**Tại sao có non-zero < 100%?**
+- Những ngày đầu tiên của mỗi sản phẩm không có lag (shift tạo NA → fill 0)
+- Sản phẩm mới có ít lịch sử → lag features = 0
+
+**Cảnh báo quan trọng:**
+
+| Tình huống | Log message | Ý nghĩa |
+|------------|-------------|---------|
+| Lag 30 không khả dụng | `⚠️ Chỉ có X ngày dữ liệu - lag_30 sẽ không khả dụng` | Dữ liệu < 31 ngày |
+| Lag 14 không khả dụng | `⚠️ Chỉ có X ngày dữ liệu - lag_14 sẽ không khả dụng` | Dữ liệu < 15 ngày |
+| Lag 7 không khả dụng | `⚠️ Chỉ có X ngày dữ liệu - lag_7 sẽ không khả dụng` | Dữ liệu < 8 ngày |
+| Không đủ data | `❌ Chỉ có X ngày dữ liệu - Không đủ cho lag_1!` | Training fail |
+
+**Best practice cho lag features:**
+- **Minimum**: 14 ngày (lag_1, lag_7, lag_14)
+- **Recommended**: 31+ ngày (đầy đủ 4 lag features)
+- **Optimal**: 90+ ngày (lag ổn định + seasonal patterns)
+
+### 4. Cold Start Handling
 
 **Vấn đề:** Sản phẩm mới hoặc ít dữ liệu (< 2 ngày)
 
@@ -490,6 +540,156 @@ thu thập thêm dữ liệu lịch sử.
 - Điều chỉnh ngưỡng cold start xuống 1 ngày
 - Thu thập thêm dữ liệu lịch sử
 - Dùng category-level dự báo thay vì product-level
+
+---
+
+## Current ML Workflow (End-to-End)
+
+### 1. Data Loading & Validation
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Bước 1: Load dữ liệu từ fct_regular_sales              │
+│  ├── Query: SELECT * FROM fct_regular_sales             │
+│  ├── JOIN dim_product cho category, brand, abc_class    │
+│  └── JOIN int_dynamic_seasonal_factor cho factors       │
+└─────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────┐
+│  Bước 2: Data Validation                                │
+│  ├── Loại bỏ records có quantity <= 0                   │
+│  ├── Loại bỏ records có revenue <= 0                    │
+│  └── Check: date range, unique days, continuity         │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Validation Output:**
+```
+✅ Loaded 150,420 rows
+   📊 Total quantity: 2,450,800
+   📊 Unique products: 1,250
+   📊 Date range: 2024-01-01 to 2024-03-15
+   📊 Unique days in data: 75
+   📊 Available lag features: [1, 7, 14, 30]
+   ✅ Time-series continuity: Good (75/75 days)
+```
+
+### 2. Feature Engineering
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Bước 3: Tạo Features                                   │
+│  ├── Time-based: day_of_week, month, is_weekend...      │
+│  ├── Lag features (adaptive):                           │
+│  │   ├── lag_1_quantity (nếu n_days >= 2)               │
+│  │   ├── lag_7_quantity (nếu n_days >= 8)               │
+│  │   ├── lag_14_quantity (nếu n_days >= 15)             │
+│  │   └── lag_30_quantity (nếu n_days >= 31)             │
+│  ├── Rolling statistics: mean/std 7, 14, 30 days        │
+│  ├── Seasonal factors: is_peak_day, seasonal_factor     │
+│  └── Encoding: branch, category, brand (categorical)    │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Feature Stats:**
+```
+✅ Created 25 features
+   📊 Lag features: ['lag_1_quantity', 'lag_7_quantity', ...]
+      - lag_1_quantity: 142,380 non-zero (94.6%)
+      - lag_7_quantity: 138,950 non-zero (92.3%)
+      - lag_14_quantity: 132,500 non-zero (88.0%)
+      - lag_30_quantity: 115,200 non-zero (76.5%)
+```
+
+### 3. Model Training (2 Models)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Model 1: Product-Level Quantity Forecast               │
+│  ├── Target: daily_quantity                             │
+│  ├── Metric: MdAPE (Median Absolute Percentage Error)   │
+│  ├── Features: Tất cả (lag, rolling, seasonal...)       │
+│  └── Tuning: Optuna (default 50 trials)                 │
+└─────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────┐
+│  Model 2: Category-Level Trend Forecast                 │
+│  ├── Target: category_daily_quantity                    │
+│  ├── Metric: MAPE (Mean Absolute Percentage Error)      │
+│  ├── Aggregation: Group by category, date               │
+│  └── Tuning: Optuna                                     │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Training Output:**
+```
+📦 Model 1: Product-Level Quantity Forecast (MdAPE)
+✅ Model 1 trained successfully with 25 features
+   🏆 Top 5 features: lag_1_quantity, seasonal_factor, rolling_mean_7, ...
+
+📊 Model 2: Category Trend Forecast (MAPE)  
+✅ Model 2 trained successfully
+   📈 Category coverage: 15 categories
+```
+
+### 4. Prediction Workflow
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Bước 1: Chọn sản phẩm cần dự báo                       │
+│  ├── Default: Top 50 ABC products (theo doanh thu)      │
+│  └── Option: Tất cả sản phẩm active (30 ngày gần nhất)  │
+└─────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────┐
+│  Bước 2: Load historical data (60 ngày)                 │
+│  ├── Batch query tất cả products (1 query)              │
+│  └── Validation: quantity > 0, revenue > 0              │
+└─────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────┐
+│  Bước 3: Cold Start Detection                           │
+│  ├── IF product_history < 2 days:                       │
+│  │   └── Use category_median * seasonal_factor / 7      │
+│  └── ELSE:                                              │
+│       └── Use Model 1 (XGBoost) prediction              │
+└─────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────┐
+│  Bước 4: Generate 7-day forecast                        │
+│  ├── For each (product, future_date):                   │
+│  │   ├── Create features from history + future date     │
+│  │   ├── Apply seasonal factors                         │
+│  │   └── Predict quantity                               │
+│  └── Post-processing: Clip negative, round              │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 5. Data Quality Monitoring
+
+| Metric | Threshold | Action |
+|--------|-----------|--------|
+| Cold start products | > 20% | 🔴 Alert in email |
+| Missing dates | > 0 days | 🟡 Warning in log |
+| Zero predictions | > 0 | 🔴 Alert in email |
+| MdAPE | > 30% | 🟡 Review model |
+| Data freshness | > 2 days | 🔴 Alert |
+
+### 6. Email Reports
+
+**Training Report:**
+- Model metrics (MdAPE, MAPE)
+- Data quality summary
+- Feature importance
+- Cold start count
+- Alerts (nếu có)
+
+**Forecast Report:**
+- Total products forecasted
+- Week-over-week comparison
+- ABC distribution
+- Top movers (tăng/giảm)
+- Purchase order summary
 
 ---
 
