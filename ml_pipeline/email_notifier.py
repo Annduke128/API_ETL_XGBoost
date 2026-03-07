@@ -272,7 +272,8 @@ class EmailNotifier:
         return False
     
     def send_training_report(self, metrics: Dict, training_duration: float = 0,
-                           model_dir: str = '/app/models') -> bool:
+                           model_dir: str = '/app/models',
+                           data_quality: Dict = None) -> bool:
         """
         Gửi báo cáo kết quả training cho recipients.training_report
         
@@ -280,6 +281,7 @@ class EmailNotifier:
             metrics: Dict chứa metrics của các models
             training_duration: Thờ i gian training (giây)
             model_dir: Thư mục chứa models
+            data_quality: Dict chứa thông tin về chất lượng dữ liệu (cold_start_count, fallback_used, etc.)
         
         Returns:
             True nếu gửi thành công
@@ -306,7 +308,7 @@ class EmailNotifier:
         subject = f"{subject_prefix} - {timestamp}"
         
         # Tạo HTML body
-        html_body = self._create_training_html(metrics, training_duration, timestamp)
+        html_body = self._create_training_html(metrics, training_duration, timestamp, data_quality)
         
         # Chuẩn bị attachments (file_path, filename, cid=None)
         attachments = []
@@ -317,7 +319,8 @@ class EmailNotifier:
         
         return self._send_email(subject, html_body, attachments, report_type='training_report')
     
-    def _create_training_html(self, metrics: Dict, duration: float, timestamp: str) -> str:
+    def _create_training_html(self, metrics: Dict, duration: float, timestamp: str, 
+                              data_quality: Dict = None) -> str:
         """Tạo HTML cho training report với metrics phù hợp cho từng model"""
         
         # Map model names đến (display_name, primary_metric, metric_label)
@@ -431,6 +434,8 @@ class EmailNotifier:
                         <p><strong>Số models:</strong> {len(metrics)}</p>
                         <p><strong>Thờ i gian:</strong> {timestamp}</p>
                     </div>
+                    
+                    {self._create_data_quality_alert(data_quality)}
                     
                     <h3 style="color: #333; border-bottom: 2px solid #667eea; padding-bottom: 10px;">
                         📈 Model Performance Metrics
@@ -930,6 +935,86 @@ class EmailNotifier:
             'default': '#757575'       # Xám
         }
         return colors.get(method, '#757575')
+    
+    def _create_data_quality_alert(self, data_quality: Dict = None) -> str:
+        """Tạo HTML cảnh báo về chất lượng dữ liệu"""
+        if not data_quality:
+            return ''
+        
+        alerts = []
+        warning_level = 'info'  # info, warning, error
+        
+        # Kiểm tra cold start
+        cold_start_count = data_quality.get('cold_start_count', 0)
+        if cold_start_count > 0:
+            warning_level = 'warning'
+            alerts.append(f"<li>⚠️ <strong>{cold_start_count}</strong> sản phẩm dùng <em>category median fallback</em> do thiếu dữ liệu lịch sử (&lt; 2 ngày)</li>")
+        
+        # Kiểm tra fallback
+        fallback_used = data_quality.get('fallback_used', False)
+        if fallback_used:
+            warning_level = 'warning'
+            alerts.append("<li>⚠️ Model đã sử dụng <em>fallback prediction</em> cho một số sản phẩm</li>")
+        
+        # Kiểm tra thiếu dữ liệu nghiêm trọng
+        missing_data_pct = data_quality.get('missing_data_pct', 0)
+        if missing_data_pct > 20:
+            warning_level = 'error'
+            alerts.append(f"<li>🚨 <strong>{missing_data_pct:.1f}%</strong> sản phẩm thiếu dữ liệu nghiêm trọng - Cần kiểm tra data pipeline</li>")
+        elif missing_data_pct > 5:
+            warning_level = 'warning'
+            alerts.append(f"<li>⚠️ <strong>{missing_data_pct:.1f}%</strong> sản phẩm thiếu dữ liệu</li>")
+        
+        # Kiểm tra zero predictions
+        zero_predictions = data_quality.get('zero_predictions', 0)
+        if zero_predictions > 0:
+            warning_level = 'error'
+            alerts.append(f"<li>🚨 <strong>{zero_predictions}</strong> dự báo = 0 - Cần kiểm tra ngay</li>")
+        
+        # Kiểm tra data freshness
+        data_age_days = data_quality.get('data_age_days', 0)
+        if data_age_days > 2:
+            warning_level = 'error'
+            alerts.append(f"<li>🚨 Dữ liệu đã cũ: <strong>{data_age_days} ngày</strong> - Cần cập nhật data pipeline</li>")
+        elif data_age_days > 1:
+            warning_level = 'warning'
+            alerts.append(f"<li>⚠️ Dữ liệu chậm: <strong>{data_age_days} ngày</strong></li>")
+        
+        if not alerts:
+            return ''
+        
+        # Determine colors based on warning level
+        if warning_level == 'error':
+            bg_color = '#ffebee'
+            border_color = '#f44336'
+            title_color = '#c62828'
+            icon = '🔴'
+        elif warning_level == 'warning':
+            bg_color = '#fff3e0'
+            border_color = '#ff9800'
+            title_color = '#e65100'
+            icon = '🟠'
+        else:
+            bg_color = '#e3f2fd'
+            border_color = '#2196f3'
+            title_color = '#1565c0'
+            icon = '🔵'
+        
+        alerts_html = '\n'.join(alerts)
+        
+        return f"""
+        <div style="background: {bg_color}; border-left: 4px solid {border_color}; 
+                    padding: 15px; margin: 20px 0; border-radius: 4px;">
+            <h4 style="margin: 0 0 10px 0; color: {title_color};">{icon} Cảnh báo chất lượng dữ liệu</h4>
+            <ul style="margin: 0; padding-left: 20px; font-size: 14px; color: #333;">
+                {alerts_html}
+            </ul>
+            <p style="margin: 10px 0 0 0; font-size: 12px; color: #666; font-style: italic;">
+                💡 <strong>Khuyến nghị:</strong> Kiểm tra data pipeline và đảm bảo dữ liệu được cập nhật đầy đủ.
+                Nếu tỷ lệ cold start cao, cân nhắc thu thập thêm dữ liệu lịch sử hoặc điều chỉnh ngưỡng tối thiểu.
+            </p>
+        </div>
+        """
 
 
 # Helper function để dễ sử dụng

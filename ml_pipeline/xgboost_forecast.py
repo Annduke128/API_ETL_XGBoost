@@ -69,6 +69,7 @@ class SalesForecaster:
         self.models = {}
         self.metrics = {}
         self.studies = {}  # Lưu Optuna studies
+        self.data_quality = {}  # Lưu thông tin chất lượng dữ liệu
         
         # Khởi tạo email notifier
         self.email_notifier = None
@@ -1293,10 +1294,22 @@ class SalesForecaster:
         if send_email and self.email_notifier:
             try:
                 logger.info("📧 Đang gửi email thông báo training...")
+                
+                # Chuẩn bị data quality info
+                data_quality_info = {
+                    'cold_start_count': self.data_quality.get('cold_start_count', 0),
+                    'fallback_used': self.data_quality.get('fallback_used', False),
+                    'missing_data_pct': self.data_quality.get('missing_data_pct', 0),
+                    'zero_predictions': self.data_quality.get('zero_predictions', 0),
+                    'data_age_days': self.data_quality.get('data_age_days', 0),
+                    'total_products': self.data_quality.get('total_products', 0)
+                }
+                
                 success = self.email_notifier.send_training_report(
                     metrics=self.metrics,
                     training_duration=training_duration,
-                    model_dir=self.model_dir
+                    model_dir=self.model_dir,
+                    data_quality=data_quality_info
                 )
                 if success:
                     logger.info("✅ Đã gửi email training report thành công")
@@ -1736,12 +1749,25 @@ class SalesForecaster:
             total_predicted = forecasts_df['predicted_quantity'].sum()
             avg_predicted = forecasts_df['predicted_quantity'].mean()
             zero_predictions = (forecasts_df['predicted_quantity'] == 0).sum()
+            cold_start_count = len(set([p['product'] for p in cold_start_products])) if cold_start_products else 0
+            total_products = forecasts_df['ma_hang'].nunique()
+            missing_data_pct = (cold_start_count / total_products * 100) if total_products > 0 else 0
             
             logger.info(f"📊 Tổng quan dự báo:")
             logger.info(f"   - Tổng số lượng dự báo: {total_predicted:,.0f} units")
             logger.info(f"   - Trung bình/sản phẩm: {avg_predicted:.1f} units")
             if zero_predictions > 0:
                 logger.warning(f"   - ⚠️  Có {zero_predictions} dự báo = 0 (cần kiểm tra)")
+            
+            # Lưu data quality info cho email report
+            self.data_quality = {
+                'cold_start_count': cold_start_count,
+                'fallback_used': cold_start_count > 0,
+                'missing_data_pct': missing_data_pct,
+                'zero_predictions': zero_predictions,
+                'total_products': total_products,
+                'data_age_days': 0  # TODO: Tính từ last transaction date
+            }
         else:
             logger.warning("⚠️ Không có dự báo nào được tạo!")
         
