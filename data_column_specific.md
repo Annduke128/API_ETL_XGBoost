@@ -25,6 +25,60 @@
 
 ---
 
+## 🎯 OUTLIER HANDLING (WINSORIZATION)
+
+### Vấn đề
+Dữ liệu bán hàng có outliers (đơn hàng lớn bất thường) ảnh hưởng đến model:
+- Max quantity: **4,122 units** (P99 chỉ là 192)
+- Top outliers: 4,122, 4,034, 4,032 units
+
+### Giải pháp: Dynamic Winsorization
+
+```python
+# 1. Tính P99 động từ dữ liệu mỗi tuần
+p99 = df['daily_quantity'].quantile(0.99)  # 192
+
+# 2. Áp dụng Winsorization (capping)
+df['daily_quantity'] = df['daily_quantity'].clip(upper=p99)
+
+# 3. Kết quả
+# Before: [1, 2, ..., 40, ..., 192, 1000, 4122]
+# After:  [1, 2, ..., 40, ..., 192, 192,  192]
+```
+
+### Tại sao chọn P99?
+
+| Percentile | Giá trị | Records ảnh hưởng | Mô tả |
+|------------|---------|-------------------|-------|
+| P95 | 40 | ~720 (5%) | Quá nhiều |
+| **P99** | **192** | **~144 (1%)** | **Cân bằng** ✅ |
+| P99.9 | ~1000 | ~14 (0.1%) | Quá ít |
+
+### Kết quả
+
+| Metric | Trước Winsorization | Sau P99 | Thay đổi |
+|--------|---------------------|---------|----------|
+| Max quantity | 4,122 | 192 | -95% |
+| Mean quantity | 16.33 | ~15.8 | -3% |
+| Outliers removed | 0 | 144 (1%) | Giữ 99% dữ liệu |
+
+### Implementation
+
+```python
+# Trong SalesForecaster class
+def calculate_dynamic_percentiles(self, df, columns=['daily_quantity']):
+    """Tính P99 động từ dữ liệu"""
+    return {col: {'p99': df[col].quantile(0.99)} for col in columns}
+
+def apply_winsorization(self, df, column='daily_quantity', percentile=0.99):
+    """Cap outliers tại P99"""
+    cap_value = df[column].quantile(percentile)
+    df[column] = df[column].clip(upper=cap_value)
+    return df, {'cap_value': cap_value, 'outliers': (df[column] > cap_value).sum()}
+```
+
+---
+
 ## 🔥 PYSPARK ETL PIPELINE
 
 ### Data Flow
@@ -671,6 +725,8 @@ required_purchase = max(forecast_demand, min_stock_level) - current_stock
 
 | Ngày | Thay đổi |
 |------|----------|
+| 2026-03-07 | **Implement Winsorization** - Xử lý outliers động với P99 cho daily_quantity |
+| 2026-03-07 | **Dynamic P99 calculation** - Tính P99 mỗi tuần, chỉ ảnh hưởng 1% dữ liệu |
 | 2026-03-07 | **Thêm `05_ml_tables.sql`** với schema đầy đủ cho ml_forecasts và ml_model_metrics |
 | 2026-03-07 | **Cập nhật `00_run_all.sql`** để chạy đủ 5 file SQL initialization |
 | 2026-03-07 | **Thêm `ton_nho_nhat`** vào bảng `products` từ DanhSachSanPham |

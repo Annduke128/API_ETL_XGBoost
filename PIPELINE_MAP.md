@@ -436,6 +436,8 @@ docker exec -i retail_clickhouse clickhouse-client -q "
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-03-07 | **Implement Winsorization** - Xử lý outliers động với P99 cho daily_quantity | AI Assistant |
+| 2026-03-07 | **Dynamic P99 calculation** - Tính P99 mỗi tuần từ dữ liệu thực tế | AI Assistant |
 | 2026-03-07 | **Thêm `05_ml_tables.sql`** với schema đầy đủ cho ml_forecasts | AI Assistant |
 | 2026-03-07 | **Cập nhật `00_run_all.sql`** để chạy đủ 5 file SQL | AI Assistant |
 | 2026-03-07 | **Thêm `ton_nho_nhat`** từ DanhSachSanPham vào PostgreSQL | AI Assistant |
