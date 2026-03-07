@@ -1390,7 +1390,7 @@ class SalesForecaster:
         logger.info("📥 Đang tải dữ liệu lịch sử từ fct_regular_sales + JOIN seasonal...")
         
         # Tạo chuỗi product codes cho SQL IN clause
-        product_codes_str = "', '".join(product_list)
+        product_codes_str = "', '".join(str(p) for p in product_list)
         
         # Sử dụng Cách 2B: fct_regular_sales + LEFT JOIN int_dynamic_seasonal_factor
         if seasonal_table_exists:
@@ -2099,7 +2099,7 @@ class SalesForecaster:
         logger.info("📊 Đang tính tồn kho tối ưu từ dữ liệu 4 tuần gần nhất...")
         try:
             product_list = forecasts['ma_hang'].unique().tolist()
-            products_str = "', '".join(product_list)
+            products_str = "', '".join(str(p) for p in product_list)
             
             historical_query = f"""
             SELECT 
