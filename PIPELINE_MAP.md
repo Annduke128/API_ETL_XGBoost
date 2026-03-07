@@ -390,6 +390,10 @@ docker exec -i retail_clickhouse clickhouse-client -q "
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-03-07 | **Thêm `ton_nho_nhat`** từ DanhSachSanPham vào PostgreSQL | AI Assistant |
+| 2026-03-07 | **Cập nhật purchase order logic**: MAX(forecast, min_stock) - current_stock | AI Assistant |
+| 2026-03-07 | **50 sản phẩm** dự báo theo doanh thu (ABC chỉ để phân loại) | AI Assistant |
+| 2026-03-07 | **Highlight HIGH MARGIN** (>20%) và HIGH VALUE (top 20% revenue) | AI Assistant |
 | 2026-03-06 | **169 ngày DAILY DATA** - Sửa lỗi datetime từ Excel | AI Assistant |
 | 2026-03-06 | Thêm `peak_level` (1,2,3) và `impact_days` | AI Assistant |
 | 2026-03-06 | Unicode normalization cho cột Excel | AI Assistant |
