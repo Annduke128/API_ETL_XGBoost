@@ -1,0 +1,25 @@
+# Dockerfile cho hasu-dbt - Build từ root context
+FROM ghcr.io/dbt-labs/dbt-core:1.8.0
+
+USER root
+
+WORKDIR /app
+
+# Cài thêm dependencies
+RUN pip install dbt-postgres dbt-clickhouse
+
+# Copy dbt project
+COPY dbt_retail/dbt_project.yml .
+COPY dbt_retail/profiles.yml ./profiles/
+COPY dbt_retail/packages.yml .
+COPY dbt_retail/models/ ./models/
+COPY dbt_retail/seeds/ ./seeds/
+COPY dbt_retail/macros/ ./macros/
+COPY dbt_retail/tests/ ./tests/
+
+# Cài dbt packages
+RUN dbt deps
+
+USER 1000
+
+CMD ["dbt", "run"]

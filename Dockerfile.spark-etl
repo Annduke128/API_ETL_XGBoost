@@ -1,0 +1,26 @@
+# Dockerfile cho hasu-spark-etl - Build từ root context
+FROM bitnami/spark:3.4.1
+
+USER root
+
+# Cài Python và pip
+RUN apt-get update && apt-get install -y python3-pip curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements
+COPY spark-etl/python_etl/requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy Python ETL scripts
+COPY spark-etl/python_etl/*.py ./
+COPY spark-etl/config/ ./config/
+
+# Copy JDBC drivers
+COPY spark-etl/jars/ /opt/spark/jars/
+
+USER 1001
+
+ENTRYPOINT ["/opt/bitnami/spark/bin/spark-submit"]
+CMD ["--master", "local[*]", "import_sales_spark.py"]

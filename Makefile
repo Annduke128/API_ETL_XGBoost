@@ -59,6 +59,7 @@ help:
 	@echo "║                                                                  ║"
 	@echo "║  KUBERNETES / K3S                                                ║"
 	@echo "║    make app-k3s         - 🚀 Run FULL pipeline on K3s            ║"
+	@echo "║    make build-push-k3s  - 🐳 Build & push images (DOCKERHUB_)    ║"
 	@echo "║    make k3s-spark       - ⚡ Spark ETL (Hybrid)                  ║"
 	@echo "║    make k3s-csv         - Process CSV files on K3s               ║"
 	@echo "║    make k3s-sync        - Run Sync job on K3s                    ║"
@@ -598,6 +599,20 @@ k3s-copy-csv: kubectl-check
 	@echo "✅ CSV files copied!"
 	@echo ""
 	@echo "To verify, run: kubectl exec -n $(NAMESPACE) deployment/postgres -- ls -la /csv_input"
+
+# Build and push Docker images for K3s
+build-push-k3s:
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║         🐳 Build & Push Docker Images cho K3s                        ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@if [ -z "$(DOCKERHUB_USERNAME)" ] || [ "$(DOCKERHUB_USERNAME)" = "your-dockerhub-user" ]; then \
+		echo "❌ Lỗi: Cần cung cấp DOCKERHUB_USERNAME"; \
+		echo "Usage: make build-push-k3s DOCKERHUB_USERNAME=myusername"; \
+		exit 1; \
+	fi
+	@./build-and-push-k3s.sh $(DOCKERHUB_USERNAME)
 
 # Deploy commands
 k3s-deploy: kubectl-check

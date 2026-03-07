@@ -27,13 +27,13 @@ jobs:
       matrix:
         service:
           - name: ml-pipeline
-            dockerfile: ./docker/ml_pipeline/Dockerfile
+            dockerfile: ./Dockerfile.ml-pipeline
             context: .
           - name: dbt
-            dockerfile: ./docker/dbt_retail/Dockerfile
+            dockerfile: ./Dockerfile.dbt
             context: .
           - name: sync-tool
-            dockerfile: ./docker/data_cleaning/Dockerfile
+            dockerfile: ./Dockerfile.sync-tool
             context: .
 
     steps:
@@ -112,8 +112,8 @@ jobs:
       - name: Build and push Spark ETL image
         uses: docker/build-push-action@v5
         with:
-          context: ./spark-etl
-          file: ./spark-etl/Dockerfile
+          context: .
+          file: ./Dockerfile.spark-etl
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

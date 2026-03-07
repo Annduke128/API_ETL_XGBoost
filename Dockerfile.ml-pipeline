@@ -1,0 +1,27 @@
+# Dockerfile cho hasu-ml-pipeline - Build từ root context
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements và cài đặt
+COPY ml_pipeline/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy code
+COPY ml_pipeline/src/ ./src/
+COPY ml_pipeline/models/ ./models/
+COPY ml_pipeline/config/ ./config/
+
+# Môi trường
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+# Default: chạy training
+CMD ["python", "src/retrain_models.py"]
