@@ -1224,49 +1224,43 @@ class SalesForecaster:
             })
         return pd.DataFrame(summaries)
     
-    def get_top_abc_products(self, top_n: int = 5) -> pd.DataFrame:
+    def get_top_abc_products(self, top_n: int = 50) -> pd.DataFrame:
         """
-        Lấy Top N sản phẩm từ mỗi phân loại ABC (A, B, C) từ dim_product.
+        Lấy Top N sản phẩm cần nhập từ dim_product (dựa trên doanh thu lịch sử).
         Loại bỏ các sản phẩm khuyến mại để đảm bảo dự báo baseline chính xác.
-        Tổng cộng: top_n * 3 = 15 sản phẩm.
+        ABC class chỉ dùng để phân loại, không giới hạn số lượng mỗi loại.
+        Mặc định: 50 sản phẩm.
         """
         query = f"""
         SELECT 
             "p.product_code" as ma_hang,
             abc_class,
             total_historical_revenue
-        FROM (
-            SELECT 
-                product_id,
-                abc_class,
-                total_historical_revenue,
-                row_number() OVER (PARTITION BY abc_class ORDER BY total_historical_revenue DESC) as rn
-            FROM retail_dw.dim_product
-            WHERE abc_class IN ('A', 'B', 'C')
-              AND total_historical_revenue > 0
-              AND lower(category_level_1) NOT LIKE '%khuyến mại%'
-              AND lower(category_level_1) NOT LIKE '%khuyen mai%'
-        )
-        WHERE rn <= {top_n}
-        ORDER BY abc_class, rn
+        FROM retail_dw.dim_product
+        WHERE abc_class IN ('A', 'B', 'C')
+          AND total_historical_revenue > 0
+          AND lower(category_level_1) NOT LIKE '%khuyến mại%'
+          AND lower(category_level_1) NOT LIKE '%khuyen mai%'
+        ORDER BY total_historical_revenue DESC
+        LIMIT {top_n}
         """
         
         df = self.ch.query(query)
-        logger.info(f"📊 Đã chọn {len(df)} sản phẩm (Top {top_n} từ mỗi loại ABC)")
+        logger.info(f"📊 Đã chọn {len(df)} sản phẩm cần nhập (Top {top_n} theo doanh thu)")
         if len(df) > 0:
             abc_summary = df.groupby('abc_class').size().to_dict()
             for cls, count in abc_summary.items():
                 logger.info(f"   - Loại {cls}: {count} sản phẩm")
         return df
     
-    def predict_next_week(self, use_abc_filter: bool = True, abc_top_n: int = 5) -> pd.DataFrame:
+    def predict_next_week(self, use_abc_filter: bool = True, abc_top_n: int = 50) -> pd.DataFrame:
         """
         Dự báo cho tuần tới với batch query và ABC-based product selection.
         Sử dụng Model 1 (product_quantity).
         
         Args:
-            use_abc_filter: Nếu True, chỉ dự báo cho Top N sản phẩm mỗi loại ABC (A,B,C)
-            abc_top_n: Số sản phẩm chọn từ mỗi loại ABC (mặc định: 5)
+            use_abc_filter: Nếu True, chỉ dự báo cho Top N sản phẩm cần nhập (mặc định: 50)
+            abc_top_n: Số sản phẩm cần nhập để dự báo (mặc định: 50)
         
         Returns:
             DataFrame với dự báo cho 7 ngày tới
@@ -1291,7 +1285,7 @@ class SalesForecaster:
         
         # BƯỚC 1: Chọn sản phẩm để dự báo
         if use_abc_filter:
-            # Lấy Top N từ mỗi loại ABC
+            # Lấy Top N sản phẩm cần nhập
             abc_products = self.get_top_abc_products(top_n=abc_top_n)
             if len(abc_products) == 0:
                 logger.warning("⚠️ Không tìm thấy sản phẩm ABC nào. Chuyển sang dự báo tất cả sản phẩm.")
@@ -2075,7 +2069,7 @@ class SalesForecaster:
         # Nếu không có forecasts thì chạy dự báo mới
         if forecasts is None or forecasts.empty:
             logger.info("Chưa có dữ liệu dự báo, đang chạy predict_next_week...")
-            forecasts = self.predict_next_week(use_abc_filter=False)
+            forecasts = self.predict_next_week(use_abc_filter=True, abc_top_n=50)
         
         if forecasts.empty:
             logger.error("❌ Không có dữ liệu dự báo để tạo đơn hàng")
@@ -2253,8 +2247,8 @@ class SalesForecaster:
         logger.info("-" * 50)
         
         try:
-            # Dự báo cho TẤT CẢ sản phẩm (không filter ABC) để có dữ liệu đầy đủ
-            forecasts = self.predict_next_week(use_abc_filter=False)
+            # Dự báo cho Top 50 sản phẩm cần nhập
+            forecasts = self.predict_next_week(use_abc_filter=True, abc_top_n=50)
             
             if len(forecasts) > 0:
                 # Tính tổng theo sản phẩm (dùng predicted_quantity)
@@ -2494,8 +2488,8 @@ if __name__ == '__main__':
     
     if args.mode in ['predict', 'all']:
         logger.info("🔮 Mode: PREDICTION")
-        # Dùng use_abc_filter=False để dự báo tất cả sản phẩm (cho đầy đủ báo cáo)
-        forecasts = forecaster.predict_next_week(use_abc_filter=False)
+        # Dự báo Top 50 sản phẩm cần nhập (theo doanh thu lịch sử)
+        forecasts = forecaster.predict_next_week(use_abc_filter=True, abc_top_n=50)
         if len(forecasts) > 0:
             forecaster.save_forecasts(forecasts, send_email=True)
             logger.info(f"✅ Generated and saved {len(forecasts)} forecasts")
