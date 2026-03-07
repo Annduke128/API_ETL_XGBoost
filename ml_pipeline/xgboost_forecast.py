@@ -1583,7 +1583,13 @@ class SalesForecaster:
         # Lấy danh sách unique (chi_nhanh, ma_hang, ten_san_pham, categories)
         branch_products = history_df[['chi_nhanh', 'ma_hang', 'ten_san_pham', 'nhom_hang_cap_1', 'nhom_hang_cap_2']].drop_duplicates()
         
+        # Tính category averages cho cold start fallback
+        logger.info("📊 Tính category averages cho cold start fallback...")
+        category_stats = history_df.groupby('nhom_hang_cap_1')['daily_quantity'].agg(['mean', 'median', 'std']).reset_index()
+        category_stats_dict = category_stats.set_index('nhom_hang_cap_1')['median'].to_dict()
+        
         forecasts = []
+        cold_start_products = []
         model_features = list(self.models['product_quantity'].feature_names_in_)
         
         # BƯỚC 4: Xử lý từng (branch, product) trong memory (không query DB nữa)
@@ -1600,8 +1606,42 @@ class SalesForecaster:
                 (history_df['ma_hang'] == product)
             ].sort_values('ngay').reset_index(drop=True)
             
+            # COLD START HANDLING: Nếu ít hơn 2 ngày dữ liệu, dùng category median
             if len(product_history) < 2:
-                continue  # Cần ít nhất 2 ngày để tạo lag features
+                cat_median = category_stats_dict.get(cat1, 10)  # Default 10 nếu không tìm thấy category
+                cold_start_products.append({
+                    'branch': branch,
+                    'product': product,
+                    'category': cat1,
+                    'fallback_quantity': cat_median
+                })
+                
+                # Tạo dự báo đơn giản dựa trên category median
+                for future_date in future_dates:
+                    month = future_date.month
+                    sf = seasonal_map.get(month, {})
+                    seasonal_factor = sf.get('seasonal_factor', 1.0)
+                    
+                    # Áp dụng seasonal factor vào category median
+                    predicted_qty = max(0, cat_median * seasonal_factor / 7)  # Chia 7 vì median là daily
+                    
+                    forecasts.append({
+                        'forecast_date': future_date.date(),
+                        'chi_nhanh': branch,
+                        'ma_hang': product,
+                        'ten_san_pham': product_name,
+                        'nhom_hang_cap_1': cat1,
+                        'nhom_hang_cap_2': cat2,
+                        'abc_class': product_abc_map.get(product, 'Unknown'),
+                        'predicted_quantity': round(predicted_qty),
+                        'predicted_quantity_raw': float(predicted_qty),
+                        'predicted_profit_margin': None,
+                        'confidence_lower': predicted_qty * 0.5,
+                        'confidence_upper': predicted_qty * 1.5,
+                        'created_at': datetime.now(),
+                        'is_cold_start': True  # Flag để đánh dấu
+                    })
+                continue  # Skip phần dự báo bình thường
             
             # Dự báo cho từng ngày trong tương lai
             for future_date in future_dates:
@@ -1677,6 +1717,12 @@ class SalesForecaster:
         if len(forecasts_df) > 0:
             logger.info(f"✅ Đã tạo {len(forecasts_df)} dự báo thành công")
             
+            # Log cold start products
+            if cold_start_products:
+                cold_start_count = len(set([p['product'] for p in cold_start_products]))
+                logger.info(f"⚠️  Cold start: {cold_start_count} sản phẩm dùng category median fallback")
+                logger.info(f"   (Thiếu dữ liệu lịch sử, dùng trung vình ngành hàng)")
+            
             # Thống kê theo ABC class
             if use_abc_filter and 'abc_class' in forecasts_df.columns:
                 abc_stats = forecasts_df.groupby('abc_class').agg({
@@ -1685,6 +1731,17 @@ class SalesForecaster:
                 logger.info("📊 Tổng dự báo theo phân loại ABC:")
                 for cls, row in abc_stats.iterrows():
                     logger.info(f"   Loại {cls}: {row['predicted_quantity']:,.0f} units")
+            
+            # Thống kê tổng quan
+            total_predicted = forecasts_df['predicted_quantity'].sum()
+            avg_predicted = forecasts_df['predicted_quantity'].mean()
+            zero_predictions = (forecasts_df['predicted_quantity'] == 0).sum()
+            
+            logger.info(f"📊 Tổng quan dự báo:")
+            logger.info(f"   - Tổng số lượng dự báo: {total_predicted:,.0f} units")
+            logger.info(f"   - Trung bình/sản phẩm: {avg_predicted:.1f} units")
+            if zero_predictions > 0:
+                logger.warning(f"   - ⚠️  Có {zero_predictions} dự báo = 0 (cần kiểm tra)")
         else:
             logger.warning("⚠️ Không có dự báo nào được tạo!")
         
