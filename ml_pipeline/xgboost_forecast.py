@@ -1192,12 +1192,39 @@ class SalesForecaster:
         # Load data
         logger.info(f"📥 Loading {days} days of historical data...")
         df = self.load_historical_data(days=days)
+        
+        # VALIDATION: Kiểm tra dữ liệu sau khi load
+        if df.empty:
+            logger.error("❌ Không có dữ liệu để training!")
+            return self.metrics
+        
         logger.info(f"✅ Loaded {len(df):,} rows")
+        logger.info(f"   📊 Total quantity: {df['daily_quantity'].sum():,.0f}")
+        logger.info(f"   📊 Mean daily quantity: {df['daily_quantity'].mean():.2f}")
+        logger.info(f"   📊 Unique products: {df['ma_hang'].nunique()}")
+        logger.info(f"   📊 Date range: {df['ngay'].min()} to {df['ngay'].max()}")
         
         # Feature engineering
         logger.info("🔧 Creating features...")
         df_features = self.create_features(df)
+        
+        # VALIDATION: Kiểm tra sau feature engineering
+        if df_features.empty:
+            logger.error("❌ Không có dữ liệu sau khi tạo features!")
+            return self.metrics
+        
+        # Kiểm tra target column
+        if 'daily_quantity' not in df_features.columns:
+            logger.error("❌ Không tìm thấy cột target 'daily_quantity'!")
+            return self.metrics
+        
+        valid_targets = df_features['daily_quantity'].notna().sum()
         logger.info(f"✅ Created {len(self.feature_cols)} features")
+        logger.info(f"   📊 Valid targets (non-NA): {valid_targets:,} / {len(df_features):,}")
+        
+        if valid_targets == 0:
+            logger.error("❌ Không có target hợp lệ để training!")
+            return self.metrics
         
         # Chọn training function với metric type
         if use_tuning:
@@ -1216,6 +1243,16 @@ class SalesForecaster:
         logger.info("📦 Model 1: Product-Level Quantity Forecast (MdAPE)")
         logger.info("-" * 40)
         self.models['product_quantity'] = train_func(df_features, 'daily_quantity', metric_type='mdape')
+        
+        # VALIDATION: Kiểm tra model đã train thành công
+        if 'product_quantity' not in self.models or self.models['product_quantity'] is None:
+            logger.error("❌ Model 1 training failed!")
+        else:
+            model = self.models['product_quantity']
+            if hasattr(model, 'feature_importances_'):
+                logger.info(f"✅ Model 1 trained successfully with {len(model.feature_importances_)} features")
+            else:
+                logger.warning("⚠️  Model 1 may not be trained properly (no feature_importances_)")
         
         # Model 2: Category Trend Forecast (Seasonal/Festival) - Độ tin cậy thấp nhất
         logger.info("\n" + "-" * 40)
