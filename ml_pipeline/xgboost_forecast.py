@@ -80,7 +80,88 @@ class SalesForecaster:
                 logger.warning(f"⚠️ Không thể khởi tạo email notifier: {e}")
         self.feature_cols = []  # Sẽ được cập nhật động sau khi create_features
     
-    def load_historical_data(self, days: int = 0) -> pd.DataFrame:
+    def calculate_dynamic_percentiles(self, df: pd.DataFrame, columns: List[str] = ['daily_quantity'], 
+                                      percentiles: List[float] = [0.95, 0.99]) -> Dict:
+        """
+        Tính toán percentiles động từ dữ liệu để xử lý outlier
+        
+        Args:
+            df: DataFrame chứa dữ liệu
+            columns: List các cột cần tính percentiles
+            percentiles: List các mức percentile (mặc định [0.95, 0.99])
+            
+        Returns:
+            Dict chứa percentiles cho mỗi cột
+        """
+        result = {}
+        for col in columns:
+            if col in df.columns:
+                result[col] = {}
+                for p in percentiles:
+                    result[col][f'p{int(p*100)}'] = df[col].quantile(p)
+                # Thêm thống kê bổ sung
+                result[col]['mean'] = df[col].mean()
+                result[col]['std'] = df[col].std()
+                result[col]['max'] = df[col].max()
+        return result
+    
+    def apply_winsorization(self, df: pd.DataFrame, column: str = 'daily_quantity', 
+                           percentile: float = 0.99, inplace: bool = False) -> Tuple[pd.DataFrame, Dict]:
+        """
+        Áp dụng Winsorization (capping) để giảm ảnh hưởng của outliers
+        
+        Winsorization: Thay thế giá trị vượt ngưỡng P99 bằng chính giá trị P99
+        
+        Args:
+            df: DataFrame chứa dữ liệu
+            column: Tên cột cần winsorize (mặc định 'daily_quantity')
+            percentile: Mức percentile để cap (mặc định 0.99 = P99)
+            inplace: Nếu True, modify DataFrame gốc
+            
+        Returns:
+            Tuple: (DataFrame đã winsorize, Dict thông tin winsorization)
+        """
+        if not inplace:
+            df = df.copy()
+        
+        if column not in df.columns:
+            logger.warning(f"⚠️ Cột {column} không tồn tại, bỏ qua winsorization")
+            return df, {'applied': False}
+        
+        # Tính P99 động
+        cap_value = df[column].quantile(percentile)
+        original_max = df[column].max()
+        original_mean = df[column].mean()
+        
+        # Đếm số outliers
+        outliers_count = (df[column] > cap_value).sum()
+        outliers_pct = outliers_count / len(df) * 100
+        
+        # Áp dụng winsorization (capping)
+        df[column] = df[column].clip(upper=cap_value)
+        
+        # Thông tin winsorization
+        stats = {
+            'applied': True,
+            'column': column,
+            'percentile': percentile,
+            'cap_value': float(cap_value),
+            'original_max': float(original_max),
+            'original_mean': float(original_mean),
+            'new_mean': float(df[column].mean()),
+            'outliers_count': int(outliers_count),
+            'outliers_pct': float(outliers_pct),
+            'total_records': len(df)
+        }
+        
+        logger.info(f"✅ Winsorization applied to '{column}':")
+        logger.info(f"   P{int(percentile*100)} = {cap_value:.2f}")
+        logger.info(f"   Capped {outliers_count} outliers ({outliers_pct:.2f}%) from {original_max:.2f} → {cap_value:.2f}")
+        logger.info(f"   Mean: {original_mean:.2f} → {df[column].mean():.2f}")
+        
+        return df, stats
+    
+    def load_historical_data(self, days: int = 0, apply_winsorize: bool = True) -> pd.DataFrame:
         """Load dữ liệu lịch sử từ ClickHouse (fct_regular_sales + JOIN seasonal factor)
         
         Cách 2B: Query từ fct_regular_sales (doanh số không khuyến mại) và JOIN với 
@@ -88,6 +169,7 @@ class SalesForecaster:
         
         Args:
             days: Số ngày dữ liệu để load. Nếu 0, load toàn bộ dữ liệu.
+            apply_winsorize: Nếu True, áp dụng winsorization cho daily_quantity
         """
         
         # Kiểm tra các bảng cần thiết
@@ -185,6 +267,26 @@ class SalesForecaster:
             
             logger.info(f"   📊 Date range: {df['ngay'].min()} to {df['ngay'].max()}")
             logger.info(f"   📊 Products: {df['ma_hang'].nunique()}, Branches: {df['chi_nhanh'].nunique()}")
+            
+            # Áp dụng Winsorization để giảm ảnh hưởng outliers
+            if apply_winsorize and len(df) > 0:
+                logger.info("🔧 Đang áp dụng Winsorization cho daily_quantity...")
+                
+                # Tính percentiles động
+                percentiles = self.calculate_dynamic_percentiles(df, columns=['daily_quantity'])
+                p99_value = percentiles.get('daily_quantity', {}).get('p99', df['daily_quantity'].quantile(0.99))
+                
+                logger.info(f"   📊 Dynamic P99 = {p99_value:.2f}")
+                logger.info(f"   📊 Before winsorization: max={df['daily_quantity'].max():.2f}, mean={df['daily_quantity'].mean():.2f}")
+                
+                # Áp dụng winsorization
+                df, win_stats = self.apply_winsorization(df, column='daily_quantity', percentile=0.99, inplace=True)
+                
+                # Lưu thông tin winsorization để sử dụng sau này
+                self._winsorization_stats = win_stats
+                
+                logger.info(f"   ✅ After winsorization: max={df['daily_quantity'].max():.2f}, mean={df['daily_quantity'].mean():.2f}")
+            
             return df
             
         except Exception as e:
@@ -247,6 +349,12 @@ class SalesForecaster:
             df['abc_class'] = df['abc_class'].fillna('C')
             
             logger.info(f"✅ Đã load {len(df):,} records từ fct_regular_sales (no seasonal - fallback)")
+            
+            # Áp dụng Winsorization
+            if apply_winsorize and len(df) > 0:
+                logger.info("🔧 Đang áp dụng Winsorization cho daily_quantity (fallback)...")
+                df, _ = self.apply_winsorization(df, column='daily_quantity', percentile=0.99, inplace=True)
+            
             return df
             
         except Exception as e:
@@ -327,6 +435,12 @@ class SalesForecaster:
             df['abc_class'] = df['abc_class'].fillna('C')
             
             logger.info(f"✅ Đã load {len(df):,} records từ fct_daily_sales (fallback, đã loại bỏ promotion)")
+            
+            # Áp dụng Winsorization
+            if len(df) > 0:
+                logger.info("🔧 Đang áp dụng Winsorization cho daily_quantity (fct_daily_sales fallback)...")
+                df, _ = self.apply_winsorization(df, column='daily_quantity', percentile=0.99, inplace=True)
+            
             return df
             
         except Exception as e:
