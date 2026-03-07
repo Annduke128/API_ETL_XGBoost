@@ -8,13 +8,13 @@ if [ -z "$DOCKERHUB_USER" ]; then
     exit 1
 fi
 
-echo "🔨 Building images from root context..."
+echo "🔨 Building images..."
 
-# Build từ root context với Dockerfile riêng cho từng service
-docker build -f Dockerfile.sync-tool -t ${DOCKERHUB_USER}/hasu-sync-tool:latest .
-docker build -f Dockerfile.ml-pipeline -t ${DOCKERHUB_USER}/hasu-ml-pipeline:latest .
-docker build -f Dockerfile.spark-etl -t ${DOCKERHUB_USER}/hasu-spark-etl:latest .
-docker build -f Dockerfile.dbt -t ${DOCKERHUB_USER}/hasu-dbt:latest .
+# Build từng service với context và Dockerfile đúng
+docker build -t ${DOCKERHUB_USER}/hasu-sync-tool:latest ./data_cleaning
+docker build -t ${DOCKERHUB_USER}/hasu-ml-pipeline:latest ./ml_pipeline
+docker build -t ${DOCKERHUB_USER}/hasu-spark-etl:latest ./spark-etl
+docker build -t ${DOCKERHUB_USER}/hasu-dbt:latest ./dbt_retail
 
 echo "⬆️ Pushing to Docker Hub..."
 docker push ${DOCKERHUB_USER}/hasu-sync-tool:latest

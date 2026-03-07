@@ -26,15 +26,15 @@ jobs:
     strategy:
       matrix:
         service:
-          - name: ml-pipeline
-            dockerfile: ./Dockerfile.ml-pipeline
-            context: .
-          - name: dbt
-            dockerfile: ./Dockerfile.dbt
-            context: .
           - name: sync-tool
-            dockerfile: ./Dockerfile.sync-tool
-            context: .
+            context: ./data_cleaning
+            dockerfile: ./data_cleaning/Dockerfile
+          - name: ml-pipeline
+            context: ./ml_pipeline
+            dockerfile: ./ml_pipeline/Dockerfile
+          - name: dbt
+            context: ./dbt_retail
+            dockerfile: ./dbt_retail/Dockerfile
 
     steps:
       - name: Checkout repository
@@ -75,7 +75,7 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
-  # Spark ETL build - separate job vì build phức tạp (sbt + multi-stage)
+  # Spark ETL build - separate job
   build-spark-etl:
     runs-on: ubuntu-latest
     permissions:
@@ -112,8 +112,8 @@ jobs:
       - name: Build and push Spark ETL image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./Dockerfile.spark-etl
+          context: ./spark-etl
+          file: ./spark-etl/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -131,9 +131,9 @@ jobs:
         run: |
           echo "✅ Docker images built and pushed successfully!"
           echo "Images:"
+          echo "  - ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_PREFIX }}-sync-tool:latest"
           echo "  - ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_PREFIX }}-ml-pipeline:latest"
           echo "  - ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_PREFIX }}-dbt:latest"
-          echo "  - ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_PREFIX }}-sync-tool:latest"
           echo "  - ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_PREFIX }}-spark-etl:latest"
 
       - name: Notify failure
