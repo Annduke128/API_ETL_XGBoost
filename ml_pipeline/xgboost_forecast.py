@@ -1916,6 +1916,39 @@ class SalesForecaster:
                 n_products = forecasts['ma_hang'].nunique() if 'ma_hang' in forecasts.columns else 0
                 logger.info(f"📧 Đang gửi email forecast report với {len(forecasts)} records, {n_products} sản phẩm...")
                 
+                # THÊM DỮ LIỆU BÁN TUẦN TRƯỚC cho email report
+                logger.info("📊 Query doanh số tuần trước cho email report...")
+                try:
+                    product_list = forecasts['ma_hang'].unique().tolist()
+                    products_str = "', '".join(str(p) for p in product_list)
+                    
+                    last_week_query = f"""
+                    SELECT 
+                        f.product_code as ma_hang,
+                        SUM(f.quantity_sold) as last_week_sales
+                    FROM retail_dw.fct_regular_sales f
+                    WHERE f.product_code IN ('{products_str}')
+                      AND f.transaction_date >= today() - 14
+                      AND f.transaction_date < today() - 7
+                    GROUP BY f.product_code
+                    """
+                    last_week_df = self.ch.query(last_week_query)
+                    
+                    if not last_week_df.empty:
+                        forecasts = forecasts.merge(
+                            last_week_df[['ma_hang', 'last_week_sales']], 
+                            on='ma_hang', 
+                            how='left'
+                        )
+                        forecasts['last_week_sales'] = forecasts['last_week_sales'].fillna(0)
+                        logger.info(f"✅ Đã thêm last_week_sales cho {len(last_week_df)} sản phẩm")
+                    else:
+                        logger.warning("⚠️ Không có dữ liệu bán tuần trước")
+                        forecasts['last_week_sales'] = 0
+                except Exception as e:
+                    logger.warning(f"⚠️ Không thể lấy dữ liệu tuần trước: {e}")
+                    forecasts['last_week_sales'] = 0
+                
                 # Lấy một số khuyến nghị tồn kho cho top products
                 inventory_recs = []
                 if 'ma_hang' in forecasts.columns:
@@ -3010,6 +3043,42 @@ class SalesForecaster:
         if 'forecasts' in locals() and len(forecasts) > 0 and self.email_notifier:
             try:
                 logger.info("📧 Đang gửi email forecast report từ comprehensive report...")
+                
+                # THÊM DỮ LIỆU BÁN TUẦN TRƯỚC cho email report
+                logger.info("📊 Query doanh số tuần trước cho email report...")
+                try:
+                    product_list = forecasts['ma_hang'].unique().tolist()
+                    products_str = "', '".join(str(p) for p in product_list)
+                    
+                    last_week_query = f"""
+                    SELECT 
+                        f.product_code as ma_hang,
+                        SUM(f.quantity_sold) as last_week_sales,
+                        SUM(f.gross_revenue) as last_week_revenue
+                    FROM retail_dw.fct_regular_sales f
+                    WHERE f.product_code IN ('{products_str}')
+                      AND f.transaction_date >= today() - 14
+                      AND f.transaction_date < today() - 7
+                    GROUP BY f.product_code
+                    """
+                    last_week_df = self.ch.query(last_week_query)
+                    
+                    if not last_week_df.empty:
+                        # Merge vào forecasts
+                        forecasts = forecasts.merge(
+                            last_week_df[['ma_hang', 'last_week_sales']], 
+                            on='ma_hang', 
+                            how='left'
+                        )
+                        forecasts['last_week_sales'] = forecasts['last_week_sales'].fillna(0)
+                        total_last_week = forecasts['last_week_sales'].sum()
+                        logger.info(f"✅ Đã thêm last_week_sales: {total_last_week:,.0f} units")
+                    else:
+                        logger.warning("⚠️ Không có dữ liệu bán tuần trước")
+                        forecasts['last_week_sales'] = 0
+                except Exception as e:
+                    logger.warning(f"⚠️ Không thể lấy dữ liệu tuần trước: {e}")
+                    forecasts['last_week_sales'] = 0
                 
                 # Lấy inventory recommendations từ report
                 inventory_recs = report['sections'].get('inventory_recommendations', [])
