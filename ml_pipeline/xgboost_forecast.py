@@ -157,7 +157,7 @@ class SalesForecaster:
             p.brand as thuong_hieu,
             p.abc_class
         FROM retail_dw.fct_regular_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = toString(p.product_id)
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
         LEFT JOIN retail_dw.int_dynamic_seasonal_factor s 
             ON toMonth(f.transaction_date) = s.month
         WHERE 1=1
@@ -233,7 +233,7 @@ class SalesForecaster:
             1.0 as quantity_factor,
             '' as peak_reason
         FROM retail_dw.fct_regular_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = toString(p.product_id)
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
         {date_filter}
         ORDER BY f.transaction_date
         """
@@ -311,7 +311,7 @@ class SalesForecaster:
             p.brand as thuong_hieu,
             p.abc_class
         FROM retail_dw.fct_daily_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = toString(p.product_id)
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
         WHERE lower(p.category_level_1) NOT LIKE '%khuyến mại%'
           AND lower(p.category_level_1) NOT LIKE '%khuyen mai%'
           {date_filter}
@@ -1232,7 +1232,7 @@ class SalesForecaster:
         """
         query = f"""
         SELECT 
-            product_id as ma_hang,
+            "p.product_code" as ma_hang,
             abc_class,
             total_historical_revenue
         FROM (
@@ -1318,7 +1318,7 @@ class SalesForecaster:
                 products_query = """
                 SELECT DISTINCT f.product_code as ma_hang
                 FROM retail_dw.fct_daily_sales f
-                LEFT JOIN retail_dw.dim_product p ON f.product_code = toString(p.product_id)
+                LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
                 WHERE f.transaction_date >= today() - 30
                   AND lower(p.category_level_1) NOT LIKE '%khuyến mại%'
                   AND lower(p.category_level_1) NOT LIKE '%khuyen mai%'
@@ -1417,7 +1417,7 @@ class SalesForecaster:
                 COALESCE(s.quantity_factor, 1.0) as quantity_factor,
                 s.peak_reason
             FROM retail_dw.fct_regular_sales f
-            LEFT JOIN retail_dw.dim_product p ON f.product_code = toString(p.product_id)
+            LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
             LEFT JOIN retail_dw.int_dynamic_seasonal_factor s 
                 ON toMonth(f.transaction_date) = s.month
             WHERE f.product_code IN ('{product_codes_str}')
@@ -1446,7 +1446,7 @@ class SalesForecaster:
                 1.0 as quantity_factor,
                 '' as peak_reason
             FROM retail_dw.fct_regular_sales f
-            LEFT JOIN retail_dw.dim_product p ON f.product_code = toString(p.product_id)
+            LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
             WHERE f.product_code IN ('{product_codes_str}')
               AND f.transaction_date >= today() - 60
             ORDER BY f.branch_code, f.product_code, f.transaction_date
@@ -1781,7 +1781,7 @@ class SalesForecaster:
                 false
             ) as is_holiday
         FROM retail_dw.fct_regular_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = toString(p.product_id)
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
         WHERE p.category_level_1 IN ('{cats_str}')
           AND f.transaction_date >= today() - 60
         GROUP BY f.transaction_date, p.category_level_1
@@ -2084,7 +2084,7 @@ class SalesForecaster:
         # Lấy mã vạch và thông tin bổ sung từ dim_product
         try:
             barcode_query = """
-            SELECT product_id as ma_hang, barcode as ma_vach
+            SELECT "p.product_code" as ma_hang, barcode as ma_vach
             FROM retail_dw.dim_product
             WHERE barcode IS NOT NULL AND barcode != ''
             """
