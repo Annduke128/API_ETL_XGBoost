@@ -206,14 +206,96 @@ importance = model.feature_importances_
 
 ---
 
+## Data Validation & Quality Checks
+
+### 1. Sales Data Validation
+
+**Kiểm tra dữ liệu bán hàng thực tế:**
+
+```python
+# Chỉ giữ records có dữ liệu bán thực tế
+df = df[df['daily_quantity'] > 0]
+df = df[df['daily_revenue'] > 0]
+```
+
+**Tại sao cần validation:**
+- Loại bỏ placeholder records (quantity = 0 hoặc NULL)
+- Đảm bảo model học từ giao dịch thực, không phải records trống
+- Tránh dự báo = 0 do thiếu dữ liệu
+
+**Log output:**
+```
+⚠️  Đã loại bỏ 850 records (5.2%) do không có dữ liệu bán hàng
+✅ Đã load 15,420 records bán hàng thực tế
+   📊 Total quantity: 2,450,800
+   📊 Total revenue: 3,245,600,000
+```
+
+### 2. Time-Series Continuity Checks
+
+**Kiểm tra tính liên tục theo ngày:**
+
+| Check | Mô tả | Ngưỡng cảnh báo |
+|-------|-------|-----------------|
+| **Date gaps** | Ngày bị thiếu dữ liệu | > 0 ngày missing |
+| **Min days** | Số ngày tối thiểu | < 14 ngày 🔴 |
+| **Distribution** | Phân phối đều/ngày | < 50% average 🟡 |
+
+**Log output:**
+```
+📊 Date range: 2024-01-01 to 2024-02-29
+📊 Expected days: 60, Actual days with data: 58
+⚠️  Missing data for 2 days: [2024-02-15, 2024-02-16]
+
+📊 Daily data distribution:
+   - Min records/day: 150
+   - Max records/day: 320
+   - Avg records/day: 235.5
+   ✅ Good daily data distribution
+```
+
+**Các mức cảnh báo:**
+
+| Tình huống | Mức độ | Khuyến nghị |
+|------------|--------|-------------|
+| < 14 ngày | 🔴 Nghiêm trọng | Thu thập thêm dữ liệu |
+| 14-30 ngày | 🟡 Cảnh báo | Dự báo ngắn hạn only |
+| Có ngày = 0 records | 🔴 Nghiêm trọng | Kiểm tra ETL pipeline |
+| Phân phối không đều | 🟡 Cảnh báo | Review data collection |
+
+### 3. Cold Start Handling
+
+**Vấn đề:** Sản phẩm mới hoặc ít dữ liệu (< 2 ngày)
+
+**Giải pháp:**
+```python
+if len(product_history) < 2:
+    # Dùng category median làm fallback
+    predicted_qty = category_median * seasonal_factor / 7
+```
+
+**Công thức tính category median:**
+```
+category_median = median(daily_quantity của tất cả sản phẩm cùng category)
+```
+
+**Tracking:**
+- Số lượng cold start products được log
+- Email report có section cảnh báo riêng
+- Data quality metrics tracking
+
+---
+
 ## Data Quality Indicators
 
 ### Warning signs
 
 | Issue | Dấu hiệu | Cách xử lý |
 |-------|----------|------------|
-| **Cold start** | < 7 ngày data | Dùng category average |
-| **Outliers** | MdAPE > 50% | Check data quality |
+| **Cold start** | < 2 ngày data | Dùng category median fallback |
+| **Missing dates** | Expected > Actual days | Kiểm tra ETL pipeline |
+| **Zero records/day** | Min records/day = 0 | Check data source |
+| **Outliers** | MdAPE > 50% | Winsorization hoặc review |
 | **Seasonality shift** | Model 2 >> Model 1 | Review seasonal_factor |
 | **Stock out** | 0 sales liên tục | Không dự báo = 0 |
 
@@ -236,10 +318,32 @@ importance = model.feature_importances_
 - Interaction terms: `is_weekend × is_holiday`
 - Lag features: Thử nhiều lag khác nhau
 
-### 4. Handling New Products
-- Cold start problem: Dùng category average
-- Warm up: Sau 7-14 ngày có thể dự báo
-- Full: Sau 30+ ngày
+### 4. Handling New Products (Cold Start)
+
+**Cold start problem:** Sản phẩm có < 2 ngày dữ liệu lịch sử
+
+**Phân loại theo mức độ dữ liệu:**
+
+| Mức độ | Ngày dữ liệu | Phương pháp | Độ tin cậy |
+|--------|--------------|-------------|------------|
+| **Cold start** | < 2 ngày | Category median + seasonal | LOW |
+| **Warm up** | 2-14 ngày | Model với limited features | MEDIUM |
+| **Stable** | 14-30 ngày | Full model features | HIGH |
+| **Mature** | > 30 ngày | Full model + all lags | HIGH |
+
+**Công thức cold start fallback:**
+```python
+# Tính category median từ dữ liệu lịch sử
+category_median = df.groupby('category')['daily_quantity'].median()
+
+# Áp dụng seasonal adjustment
+predicted_qty = category_median * seasonal_factor / 7
+```
+
+**Email alerts:**
+- Cold start count được báo cáo trong training report
+- Cảnh báo nếu > 20% products là cold start
+- Recommend thu thập thêm dữ liệu nếu cần
 
 ---
 
@@ -276,6 +380,7 @@ Hoặc weighted by confidence score.
 2. **Feature Drift**: Distribution của features thay đổi
 3. **Data Freshness**: Last update timestamp
 4. **Coverage**: % products có dự báo
+5. **Data Quality**: Cold start %, missing dates, zero predictions
 
 ### Alert Thresholds
 
@@ -284,6 +389,107 @@ Hoặc weighted by confidence score.
 | MdAPE | > 25% | > 35% |
 | Missing forecasts | > 5% | > 15% |
 | Data latency | > 2 days | > 5 days |
+| Cold start products | > 10% | > 20% |
+| Missing dates | > 1 day | > 3 days |
+| Zero predictions | > 0 | > 5% |
+
+### Email Alert Colors
+
+Training report hiển thị data quality alerts với màu sắc:
+
+🔴 **Error (Đỏ):**
+- > 20% cold start products
+- Có dự báo = 0
+- Data > 2 ngày không cập nhật
+
+🟠 **Warning (Cam):**
+- 5-20% cold start products
+- 5-20% missing data
+- Data chậm 1-2 ngày
+
+🔵 **Info (Xanh):**
+- Các trường hợp khác
+
+**Nội dung email alert:**
+```
+🔴 Cảnh báo chất lượng dữ liệu
+• ⚠️ 15 sản phẩm dùng category median fallback
+• 🚨 3 dự báo = 0 - Cần kiểm tra ngay
+
+💡 Khuyến nghị: Kiểm tra data pipeline và đảm bảo dữ liệu 
+được cập nhật đầy đủ. Nếu tỷ lệ cold start cao, cân nhắc 
+thu thập thêm dữ liệu lịch sử.
+```
+
+---
+
+## Troubleshooting Guide
+
+### Vấn đề: Dự báo = 0 cho tất cả sản phẩm
+
+**Nguyên nhân có thể:**
+1. **Thiếu dữ liệu bán hàng** - Kiểm tra log:
+   ```
+   ❌ Không có dữ liệu bán hàng hợp lệ sau khi lọc!
+   ```
+   
+2. **Tất cả products đều là cold start** - Kiểm tra:
+   ```
+   ⚠️  Cold start: 100% sản phẩm dùng category median fallback
+   ```
+
+**Cách xử lý:**
+- Kiểm tra bảng `fct_regular_sales` có dữ liệu không
+- Verify ETL pipeline chạy thành công
+- Check date range của dữ liệu
+
+### Vấn đề: Thiếu nhiều ngày dữ liệu
+
+**Kiểm tra:**
+```
+📊 Expected days: 60, Actual days with data: 45
+⚠️  Missing data for 15 days
+```
+
+**Nguyên nhân:**
+- ETL job failed trong các ngày đó
+- Data source không có dữ liệu
+- Lỗi khi import CSV
+
+**Cách xử lý:**
+- Re-run ETL cho các ngày bị thiếu
+- Check Airflow DAG logs
+- Verify CSV files có đầy đủ dữ liệu
+
+### Vấn đề: MdAPE cao (> 50%)
+
+**Nguyên nhân:**
+- Outliers trong dữ liệu
+- Seasonality chưa được capture
+- Model underfit
+
+**Cách xử lý:**
+1. Kiểm tra winsorization đã áp dụng chưa
+2. Review seasonal factors có chính xác không
+3. Tăng số trials cho hyperparameter tuning
+4. Thử thêm features mới
+
+### Vấn đề: Cold start products > 20%
+
+**Kiểm tra:**
+```
+⚠️  Cold start: 150 sản phẩm (25%) dùng category median fallback
+```
+
+**Nguyên nhân:**
+- Nhiều sản phẩm mới
+- Dữ liệu lịch sử bị xóa
+- Ngưỡng "< 2 ngày" quá cao
+
+**Cách xử lý:**
+- Điều chỉnh ngưỡng cold start xuống 1 ngày
+- Thu thập thêm dữ liệu lịch sử
+- Dùng category-level dự báo thay vì product-level
 
 ---
 
@@ -292,3 +498,4 @@ Hoặc weighted by confidence score.
 - XGBoost Documentation: https://xgboost.readthedocs.io/
 - Time Series Forecasting Best Practices
 - ABC Analysis in Inventory Management
+- ClickHouse SQL Reference
