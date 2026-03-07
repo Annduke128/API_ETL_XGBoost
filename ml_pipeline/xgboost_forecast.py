@@ -2008,6 +2008,170 @@ class SalesForecaster:
                              'Low consistency - investigate data quality'
         }
     
+    def validate_forecast_accuracy(self, days_back: int = 7) -> Dict:
+        """
+        Validate độ chính xác của model bằng cách so sánh dự báo với dữ liệu thực tế
+        
+        Lấy dự báo từ X ngày trước (cho X ngày tiếp theo) và so sánh với 
+        dữ liệu bán hàng thực tế trong X ngày đó.
+        
+        Args:
+            days_back: Số ngày lùi lại để validation (mặc định 7)
+            
+        Returns:
+            Dict chứa accuracy metrics
+        """
+        logger.info("=" * 70)
+        logger.info(f"📊 VALIDATION: Kiểm tra độ chính xác model ({days_back} ngày)")
+        logger.info("=" * 70)
+        
+        try:
+            # Lấy dữ liệu bán hàng thực tế trong 7 ngày gần nhất
+            actual_query = f"""
+            SELECT 
+                transaction_date,
+                product_code as ma_hang,
+                SUM(quantity_sold) as actual_quantity,
+                SUM(gross_revenue) as actual_revenue
+            FROM retail_dw.fct_regular_sales
+            WHERE transaction_date >= today() - INTERVAL {days_back} DAY
+              AND transaction_date < today()
+            GROUP BY transaction_date, product_code
+            ORDER BY transaction_date, product_code
+            """
+            
+            actual_df = self.ch.query(actual_query)
+            
+            if actual_df.empty:
+                logger.warning(f"⚠️ Không có dữ liệu bán hàng thực tế trong {days_back} ngày gần nhất")
+                return {'error': 'No actual sales data available'}
+            
+            logger.info(f"✅ Đã lấy {len(actual_df)} records dữ liệu thực tế")
+            logger.info(f"   Ngày: {actual_df['transaction_date'].min()} đến {actual_df['transaction_date'].max()}")
+            logger.info(f"   Số sản phẩm: {actual_df['ma_hang'].nunique()}")
+            logger.info(f"   Tổng số lượng bán thực tế: {actual_df['actual_quantity'].sum():,.0f}")
+            logger.info(f"   Tổng doanh thu thực tế: {actual_df['actual_revenue'].sum():,.0f}")
+            
+            # Lấy dự báo từ X ngày trước cho X ngày tiếp theo
+            forecast_query = f"""
+            SELECT 
+                forecast_date,
+                ma_hang,
+                predicted_quantity,
+                predicted_revenue,
+                ten_san_pham
+            FROM ml_forecasts
+            WHERE forecast_date >= CURRENT_DATE - INTERVAL {days_back * 2} DAY
+              AND forecast_date < CURRENT_DATE - INTERVAL {days_back} DAY
+              AND created_at < CURRENT_DATE - INTERVAL {days_back} DAY
+            ORDER BY forecast_date, ma_hang
+            """
+            
+            try:
+                from sqlalchemy import text
+                with self.pg.get_connection() as conn:
+                    forecast_df = pd.read_sql(text(forecast_query), conn)
+            except Exception as e:
+                logger.warning(f"⚠️ Không thể lấy dữ liệu dự báo cũ: {e}")
+                forecast_df = pd.DataFrame()
+            
+            if forecast_df.empty:
+                logger.info(f"📊 CHỈ CÓ DỮ LIỆU THỰC TẾ (không có dự báo cũ để so sánh)")
+                logger.info(f"   → Sử dụng để tính baseline metrics")
+                
+                # Tính các chỉ số cơ bản từ dữ liệu thực tế
+                daily_totals = actual_df.groupby('transaction_date')['actual_quantity'].sum()
+                
+                return {
+                    'validation_type': 'baseline_only',
+                    'days_analyzed': days_back,
+                    'actual_total_quantity': int(actual_df['actual_quantity'].sum()),
+                    'actual_total_revenue': float(actual_df['actual_revenue'].sum()),
+                    'actual_avg_daily': float(daily_totals.mean()),
+                    'actual_std_daily': float(daily_totals.std()),
+                    'num_products': actual_df['ma_hang'].nunique(),
+                    'date_range': {
+                        'start': str(actual_df['transaction_date'].min()),
+                        'end': str(actual_df['transaction_date'].max())
+                    },
+                    'top_products': actual_df.groupby('ma_hang')['actual_quantity'].sum()
+                        .sort_values(ascending=False).head(10).to_dict()
+                }
+            
+            # Nếu có cả dự báo và thực tế, tính accuracy metrics
+            logger.info(f"✅ Đã lấy {len(forecast_df)} records dự báo cũ")
+            
+            # Merge dự báo và thực tế
+            comparison = pd.merge(
+                forecast_df, 
+                actual_df,
+                left_on=['forecast_date', 'ma_hang'],
+                right_on=['transaction_date', 'ma_hang'],
+                how='inner'
+            )
+            
+            if comparison.empty:
+                logger.warning("⚠️ Không có sản phẩm nào match giữa dự báo và thực tế")
+                return {'error': 'No matching products between forecast and actual'}
+            
+            # Tính accuracy metrics
+            comparison['error'] = comparison['predicted_quantity'] - comparison['actual_quantity']
+            comparison['abs_error'] = comparison['error'].abs()
+            comparison['pct_error'] = (comparison['error'] / comparison['actual_quantity'] * 100).replace([np.inf, -np.inf], np.nan)
+            comparison['abs_pct_error'] = comparison['pct_error'].abs()
+            
+            # Overall metrics
+            mae = comparison['abs_error'].mean()
+            rmse = np.sqrt((comparison['error'] ** 2).mean())
+            mape = comparison['abs_pct_error'].mean()
+            
+            # MdAPE
+            valid_pct_errors = comparison['abs_pct_error'].dropna()
+            mdape = valid_pct_errors.median() if len(valid_pct_errors) > 0 else np.nan
+            
+            logger.info(f"\n📊 ACCURACY METRICS (so sánh dự báo vs thực tế):")
+            logger.info(f"   MAE:  {mae:.2f} units")
+            logger.info(f"   RMSE: {rmse:.2f} units")
+            logger.info(f"   MAPE: {mape:.2f}%")
+            logger.info(f"   MdAPE: {mdape:.2f}% ⭐")
+            logger.info(f"   Số records so sánh: {len(comparison)}")
+            
+            # Top sản phẩm có sai số lớn nhất
+            top_errors = comparison.nlargest(10, 'abs_error')[
+                ['ma_hang', 'ten_san_pham', 'predicted_quantity', 'actual_quantity', 'error', 'abs_pct_error']
+            ]
+            
+            logger.info(f"\n🔴 Top 10 sản phẩm có sai số lớn nhất:")
+            for _, row in top_errors.iterrows():
+                logger.info(f"   {row['ma_hang']}: Dự báo {row['predicted_quantity']:.0f}, "
+                          f"Thực tế {row['actual_quantity']:.0f}, "
+                          f"Sai số {row['error']:+.0f} ({row['abs_pct_error']:.1f}%)")
+            
+            return {
+                'validation_type': 'forecast_vs_actual',
+                'days_analyzed': days_back,
+                'metrics': {
+                    'mae': float(mae),
+                    'rmse': float(rmse),
+                    'mape': float(mape),
+                    'mdape': float(mdape)
+                },
+                'comparison_summary': {
+                    'total_forecast': float(comparison['predicted_quantity'].sum()),
+                    'total_actual': float(comparison['actual_quantity'].sum()),
+                    'overall_bias': float(comparison['predicted_quantity'].sum() - comparison['actual_quantity'].sum()),
+                    'num_records': len(comparison),
+                    'num_products': comparison['ma_hang'].nunique()
+                },
+                'top_errors': top_errors.to_dict('records')
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi validation: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'error': str(e)}
+    
     def get_inventory_recommendations(self, product_code: str) -> Dict:
         """Đưa ra khuyến nghị tồn kho"""
         # Lấy dự báo cho sản phẩm
@@ -2405,10 +2569,24 @@ class SalesForecaster:
             report['sections']['category_trend'] = {'error': str(e)}
         
         # ========================================
-        # PHẦN 3: SO SÁNH MODEL 1 vs MODEL 2
+        # PHẦN 3: VALIDATION - SO SÁNH VỚI DỮ LIỆU THỰC TẾ
         # ========================================
         logger.info("\n" + "-" * 50)
-        logger.info("📊 PHẦN 3: SO SÁNH MODEL 1 VS MODEL 2")
+        logger.info("📊 PHẦN 3: VALIDATION - SO SÁNH DỰ BÁO VỚI THỰC TẾ (7 ngày)")
+        logger.info("-" * 50)
+        
+        try:
+            validation_results = self.validate_forecast_accuracy(days_back=7)
+            report['sections']['validation'] = validation_results
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi validation: {e}")
+            report['sections']['validation'] = {'error': str(e)}
+        
+        # ========================================
+        # PHẦN 4: SO SÁNH MODEL 1 vs MODEL 2
+        # ========================================
+        logger.info("\n" + "-" * 50)
+        logger.info("📊 PHẦN 4: SO SÁNH MODEL 1 VS MODEL 2")
         logger.info("-" * 50)
         
         try:
@@ -2423,10 +2601,10 @@ class SalesForecaster:
             report['sections']['model_comparison'] = {'error': str(e)}
         
         # ========================================
-        # KHUYẾN NGHỊ TỒN KHO
+        # PHẦN 5: KHUYẾN NGHỊ TỒN KHO
         # ========================================
         logger.info("\n" + "-" * 50)
-        logger.info("📋 KHUYẾN NGHỊ TỒN KHO")
+        logger.info("📋 PHẦN 5: KHUYẾN NGHỊ TỒN KHO")
         logger.info("-" * 50)
         
         try:
