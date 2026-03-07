@@ -292,7 +292,28 @@ class SalesForecaster:
             total_revenue = df['daily_revenue'].sum()
             avg_quantity = df['daily_quantity'].mean()
             
+            # Kiểm tra tính liên tục của dữ liệu theo thởigian
+            date_range = pd.date_range(start=df['ngay'].min(), end=df['ngay'].max(), freq='D')
+            actual_dates = df['ngay'].dt.date.unique()
+            missing_dates = set(date_range.date) - set(actual_dates)
+            
             logger.info(f"   📊 Date range: {df['ngay'].min()} to {df['ngay'].max()}")
+            logger.info(f"   📊 Expected days: {len(date_range)}, Actual days with data: {len(actual_dates)}")
+            
+            if missing_dates:
+                logger.warning(f"   ⚠️  Missing data for {len(missing_dates)} days: {sorted(list(missing_dates))[:5]}{'...' if len(missing_dates) > 5 else ''}")
+            else:
+                logger.info(f"   ✅ Complete daily data - no gaps detected")
+            
+            # Kiểm tra số ngày tối thiểu
+            n_days = (df['ngay'].max() - df['ngay'].min()).days + 1
+            if n_days < 14:
+                logger.warning(f"   ⚠️  Only {n_days} days of data - recommend at least 14 days for accurate forecasting")
+            elif n_days < 30:
+                logger.info(f"   ⚠️  {n_days} days of data - acceptable for short-term forecasting")
+            else:
+                logger.info(f"   ✅ {n_days} days of data - good for forecasting")
+            
             logger.info(f"   📊 Products: {df['ma_hang'].nunique()}, Branches: {df['chi_nhanh'].nunique()}")
             logger.info(f"   📊 Total quantity: {total_quantity:,.0f}, Total revenue: {total_revenue:,.0f}")
             logger.info(f"   📊 Avg daily quantity: {avg_quantity:.2f}")
@@ -1639,6 +1660,25 @@ class SalesForecaster:
         logger.info("📊 Tính category averages cho cold start fallback...")
         category_stats = history_df.groupby('nhom_hang_cap_1')['daily_quantity'].agg(['mean', 'median', 'std']).reset_index()
         category_stats_dict = category_stats.set_index('nhom_hang_cap_1')['median'].to_dict()
+        
+        # Kiểm tra phân phối dữ liệu theo ngày
+        daily_counts = history_df.groupby('ngay').size()
+        min_daily_records = daily_counts.min()
+        max_daily_records = daily_counts.max()
+        avg_daily_records = daily_counts.mean()
+        
+        logger.info(f"   📊 Daily data distribution:")
+        logger.info(f"      - Min records/day: {min_daily_records}")
+        logger.info(f"      - Max records/day: {max_daily_records}")
+        logger.info(f"      - Avg records/day: {avg_daily_records:.1f}")
+        
+        if min_daily_records == 0:
+            empty_days = daily_counts[daily_counts == 0].index.tolist()
+            logger.warning(f"      ⚠️  {len(empty_days)} days have NO data!")
+        elif min_daily_records < avg_daily_records * 0.5:
+            logger.warning(f"      ⚠️  Some days have significantly fewer records than average")
+        else:
+            logger.info(f"      ✅ Good daily data distribution")
         
         forecasts = []
         cold_start_products = []
