@@ -1611,6 +1611,15 @@ class SalesForecaster:
         
         from sqlalchemy import text
         with self.pg.get_connection() as conn:
+            # Thêm cột abc_class nếu bảng đã tồn tại nhưng chưa có cột này
+            conn.execute(text("""
+                ALTER TABLE ml_forecasts 
+                ADD COLUMN IF NOT EXISTS abc_class VARCHAR(10),
+                ADD COLUMN IF NOT EXISTS nhom_hang_cap_1 VARCHAR(200),
+                ADD COLUMN IF NOT EXISTS nhom_hang_cap_2 VARCHAR(200);
+            """))
+            conn.commit()
+            
             conn.execute(text(create_table_sql))
             conn.commit()  # Commit CREATE TABLE
             
