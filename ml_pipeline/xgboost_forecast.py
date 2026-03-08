@@ -240,10 +240,20 @@ class SalesForecaster:
             p.brand as thuong_hieu,
             p.abc_class
         FROM retail_dw.fct_regular_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
-        LEFT JOIN retail_dw.int_dynamic_seasonal_factor s 
-            ON toMonth(f.transaction_date) = s.month
-        WHERE 1=1
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
+        LEFT JOIN (
+            SELECT month,
+                   argMax(seasonal_factor, updated_at) as seasonal_factor,
+                   argMax(revenue_factor, updated_at) as revenue_factor,
+                   argMax(quantity_factor, updated_at) as quantity_factor,
+                   argMax(is_peak_day, updated_at) as is_peak_day,
+                   argMax(peak_level, updated_at) as peak_level,
+                   argMax(peak_reason, updated_at) as peak_reason
+            FROM retail_dw.int_dynamic_seasonal_factor
+            GROUP BY month
+        ) s ON toMonth(f.transaction_date) = s.month
+        WHERE f.product_code IS NOT NULL
+          AND f.product_code != ''
           {date_filter}
         ORDER BY f.transaction_date
         """
@@ -385,7 +395,7 @@ class SalesForecaster:
             1.0 as quantity_factor,
             '' as peak_reason
         FROM retail_dw.fct_regular_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
         {date_filter}
         ORDER BY f.transaction_date
         """
@@ -469,7 +479,7 @@ class SalesForecaster:
             p.brand as thuong_hieu,
             p.abc_class
         FROM retail_dw.fct_daily_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
         WHERE lower(p.category_level_1) NOT LIKE '%khuyến mại%'
           AND lower(p.category_level_1) NOT LIKE '%khuyen mai%'
           {date_filter}
@@ -533,6 +543,8 @@ class SalesForecaster:
         df['day_of_week'] = df['ngay'].dt.dayofweek + 1  # 1=Monday, 7=Sunday
         df['day_of_month'] = df['ngay'].dt.day
         df['month'] = df['ngay'].dt.month
+        df['quarter'] = df['ngay'].dt.quarter  # EXTENDED: Quarter cho yearly seasonality
+        df['day_of_year'] = df['ngay'].dt.dayofyear  # EXTENDED: Day of year
         df['week_of_year'] = df['ngay'].dt.isocalendar().week.astype(int)
         df['is_weekend'] = (df['day_of_week'] >= 6).astype(int)
         df['is_month_start'] = (df['day_of_month'] == 1).astype(int)
@@ -559,12 +571,12 @@ class SalesForecaster:
         df = df.sort_values(['chi_nhanh', 'ma_hang', 'ngay'])
         n_unique_days = df['ngay'].nunique()
         
-        # Chỉ dùng các lag hợp lý dựa trên số ngày dữ liệu
-        available_lags = [lag for lag in [1, 7, 14, 30] if lag < n_unique_days]
+        # EXTENDED: Thêm lag 3 và 21 ngày cho model training sâu hơn
+        available_lags = [lag for lag in [1, 3, 7, 14, 21, 30] if lag < n_unique_days]
         if not available_lags:
             available_lags = [1]  # Ít nhất cần lag 1
         
-        logger.info(f"Sử dụng lag features: {available_lags} (dữ liệu có {n_unique_days} ngày)")
+        logger.info(f"📊 Sử dụng lag features: {available_lags} (dữ liệu có {n_unique_days} ngày)")
         
         for lag in available_lags:
             df[f'lag_{lag}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'].shift(lag)
@@ -580,6 +592,22 @@ class SalesForecaster:
                 .transform(lambda x: x.rolling(window, min_periods=1).mean())
             df[f'rolling_std_{window}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'] \
                 .transform(lambda x: x.rolling(window, min_periods=1).std())
+            # EXTENDED: Min/Max/Range cho volatility analysis
+            df[f'rolling_min_{window}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'] \
+                .transform(lambda x: x.rolling(window, min_periods=1).min())
+            df[f'rolling_max_{window}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'] \
+                .transform(lambda x: x.rolling(window, min_periods=1).max())
+            df[f'rolling_range_{window}_quantity'] = df[f'rolling_max_{window}_quantity'] - df[f'rolling_min_{window}_quantity']
+        
+        # EXTENDED: Exponential Moving Average (EMA) - phản ứng nhanh hơn SMA
+        for span in available_windows:
+            df[f'ema_{span}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'] \
+                .transform(lambda x: x.ewm(span=span, adjust=False).mean())
+        
+        # EXTENDED: Price features
+        df['avg_price'] = df['daily_revenue'] / (df['daily_quantity'] + 1e-8)
+        df['price_change'] = df.groupby(['chi_nhanh', 'ma_hang'])['avg_price'].pct_change().fillna(0)
+        df['price_change'] = df['price_change'].replace([np.inf, -np.inf], 0)
         
         # Growth rate - handle inf values
         df['quantity_growth'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'].pct_change()
@@ -1565,7 +1593,7 @@ class SalesForecaster:
                 products_query = """
                 SELECT DISTINCT f.product_code as ma_hang
                 FROM retail_dw.fct_daily_sales f
-                LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
+                LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
                 WHERE f.transaction_date >= today() - 30
                   AND lower(p.category_level_1) NOT LIKE '%khuyến mại%'
                   AND lower(p.category_level_1) NOT LIKE '%khuyen mai%'
@@ -1600,15 +1628,16 @@ class SalesForecaster:
             months_str = ', '.join([str(m) for m in future_months])
             
             seasonal_query = f"""
-            SELECT DISTINCT
-                s.month,
-                s.peak_reason,
-                s.seasonal_factor,
-                s.revenue_factor,
-                s.quantity_factor,
-                CASE WHEN s.peak_reason IS NOT NULL THEN 1 ELSE 0 END as is_peak_day
-            FROM retail_dw.int_dynamic_seasonal_factor s
-            WHERE s.month IN ({months_str})
+            SELECT 
+                month,
+                argMax(peak_reason, updated_at) as peak_reason,
+                argMax(seasonal_factor, updated_at) as seasonal_factor,
+                argMax(revenue_factor, updated_at) as revenue_factor,
+                argMax(quantity_factor, updated_at) as quantity_factor,
+                argMax(is_peak_day, updated_at) as is_peak_day
+            FROM retail_dw.int_dynamic_seasonal_factor
+            WHERE month IN ({months_str})
+            GROUP BY month
             """
             try:
                 seasonal_df = self.ch.query(seasonal_query)
@@ -1664,9 +1693,18 @@ class SalesForecaster:
                 COALESCE(s.quantity_factor, 1.0) as quantity_factor,
                 s.peak_reason
             FROM retail_dw.fct_regular_sales f
-            LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
-            LEFT JOIN retail_dw.int_dynamic_seasonal_factor s 
-                ON toMonth(f.transaction_date) = s.month
+            LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
+            LEFT JOIN (
+                SELECT month,
+                       argMax(seasonal_factor, updated_at) as seasonal_factor,
+                       argMax(revenue_factor, updated_at) as revenue_factor,
+                       argMax(quantity_factor, updated_at) as quantity_factor,
+                       argMax(is_peak_day, updated_at) as is_peak_day,
+                       argMax(peak_level, updated_at) as peak_level,
+                       argMax(peak_reason, updated_at) as peak_reason
+                FROM retail_dw.int_dynamic_seasonal_factor
+                GROUP BY month
+            ) s ON toMonth(f.transaction_date) = s.month
             WHERE f.product_code IN ('{product_codes_str}')
               AND f.transaction_date >= today() - 60
             ORDER BY f.branch_code, f.product_code, f.transaction_date
@@ -1693,7 +1731,7 @@ class SalesForecaster:
                 1.0 as quantity_factor,
                 '' as peak_reason
             FROM retail_dw.fct_regular_sales f
-            LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
+            LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
             WHERE f.product_code IN ('{product_codes_str}')
               AND f.transaction_date >= today() - 60
             ORDER BY f.branch_code, f.product_code, f.transaction_date
@@ -2122,10 +2160,15 @@ class SalesForecaster:
             months_str = ', '.join([str(m) for m in future_months])
             
             seasonal_query = f"""
-            SELECT month, peak_reason, seasonal_factor, quantity_factor,
-                   CASE WHEN peak_reason IS NOT NULL THEN 1 ELSE 0 END as is_peak_day
+            SELECT 
+                month,
+                argMax(peak_reason, updated_at) as peak_reason,
+                argMax(seasonal_factor, updated_at) as seasonal_factor,
+                argMax(quantity_factor, updated_at) as quantity_factor,
+                argMax(is_peak_day, updated_at) as is_peak_day
             FROM retail_dw.int_dynamic_seasonal_factor
             WHERE month IN ({months_str})
+            GROUP BY month
             """
             try:
                 seasonal_df = self.ch.query(seasonal_query)
@@ -2161,10 +2204,21 @@ class SalesForecaster:
                 false
             ) as is_holiday
         FROM retail_dw.fct_regular_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = p."p.product_code"
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
         WHERE p.category_level_1 IN ('{cats_str}')
           AND f.transaction_date >= today() - 60
-        GROUP BY f.transaction_date, p.category_level_1
+          AND f.product_code IS NOT NULL
+          AND f.product_code != ''
+          AND f.quantity_sold > 0
+        GROUP BY 
+            f.transaction_date, 
+            p.category_level_1,
+            toDayOfWeek(f.transaction_date),
+            toDayOfMonth(f.transaction_date),
+            toMonth(f.transaction_date),
+            toWeek(f.transaction_date),
+            is_weekend,
+            is_holiday
         ORDER BY p.category_level_1, f.transaction_date
         """
         
@@ -3194,6 +3248,8 @@ if __name__ == '__main__':
                        help='Buộc train lại dù không có dữ liệu mới')
     parser.add_argument('--min-new-days', type=int, default=1,
                        help='Số ngày dữ liệu mới tối thiểu để train lại')
+    parser.add_argument('--deep', action='store_true',
+                       help='Deep training mode: 150 trials, full features (chậm hơn nhưng chính xác hơn)')
     
     args = parser.parse_args()
     
@@ -3201,9 +3257,17 @@ if __name__ == '__main__':
     
     if args.mode in ['train', 'all']:
         logger.info("🚀 Mode: TRAINING")
+        
+        # Deep training mode: tăng trials và đảm bảo đủ dữ liệu
+        if args.deep:
+            n_trials = 150
+            logger.info("🔬 DEEP TRAINING MODE: 150 trials, extended features")
+        else:
+            n_trials = args.trials
+            
         metrics = forecaster.train_all_models(
             use_tuning=not args.no_tuning,
-            n_trials=args.trials,
+            n_trials=n_trials,
             days=args.days,
             send_email=True
         )
