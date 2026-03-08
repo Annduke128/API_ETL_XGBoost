@@ -2456,9 +2456,9 @@ class SalesForecaster:
                 predicted_revenue,
                 ten_san_pham
             FROM ml_forecasts
-            WHERE forecast_date >= CURRENT_DATE - INTERVAL {days_back * 2} DAY
-              AND forecast_date < CURRENT_DATE - INTERVAL {days_back} DAY
-              AND created_at < CURRENT_DATE - INTERVAL {days_back} DAY
+            WHERE forecast_date >= CURRENT_DATE - INTERVAL '{days_back * 2} days'
+              AND forecast_date < CURRENT_DATE - INTERVAL '{days_back} days'
+              AND created_at < CURRENT_DATE - INTERVAL '{days_back} days'
             ORDER BY forecast_date, ma_hang
             """
             
