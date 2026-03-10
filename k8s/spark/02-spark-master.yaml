@@ -15,54 +15,32 @@ spec:
     spec:
       containers:
       - name: spark-master
-        image: docker.io/bitnami/spark:latest
+        image: apache/spark:3.5.0
+        command: ["/opt/spark/bin/spark-class"]
+        args: ["org.apache.spark.deploy.master.Master"]
+        ports:
+        - containerPort: 8080
+          name: web
+        - containerPort: 7077
+          name: spark
+        - containerPort: 8888
+          name: rest
         env:
-        - name: SPARK_MODE
-          value: master
         - name: SPARK_MASTER_PORT
           value: "7077"
         - name: SPARK_MASTER_WEBUI_PORT
           value: "8080"
-        - name: SPARK_MASTER_LOG
-          value: "/var/log/spark"
-        ports:
-        - containerPort: 7077
-          name: spark
-        - containerPort: 8080
-          name: webui
         resources:
           requests:
-            memory: "2Gi"
-            cpu: "1"
+            cpu: "500m"
+            memory: "1Gi"
           limits:
-            memory: "4Gi"
-            cpu: "2"
+            cpu: "1000m"
+            memory: "2Gi"
         volumeMounts:
-        - name: spark-checkpoint
+        - name: checkpoint
           mountPath: /tmp/checkpoint
-        - name: spark-shared
-          mountPath: /shared
       volumes:
-      - name: spark-checkpoint
+      - name: checkpoint
         persistentVolumeClaim:
           claimName: spark-checkpoint-pvc
-      - name: spark-shared
-        persistentVolumeClaim:
-          claimName: spark-shared-pvc
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: spark-master
-  namespace: spark
-spec:
-  selector:
-    app: spark-master
-  ports:
-  - name: spark
-    port: 7077
-    targetPort: 7077
-  - name: webui
-    port: 8080
-    targetPort: 8080
-  type: ClusterIP

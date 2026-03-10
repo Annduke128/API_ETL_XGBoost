@@ -1,3 +1,5 @@
+# Spark ETL Job - Chạy trong hasu-ml namespace
+# Kết nối đến Spark Master qua DNS: spark-master:7077
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -8,47 +10,36 @@ spec:
     spec:
       restartPolicy: OnFailure
       initContainers:
-      # Wait for Spark cluster
       - name: wait-for-spark
         image: busybox:1.36
-        command: 
-          - 'sh'
-          - '-c'
-          - |
-            until nc -z spark-master.spark 7077; do
-              echo "Waiting for Spark master..."
-              sleep 5
-            done
-            echo "Spark master is ready"
-      # Wait for databases
+        resources:
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+        command: ['sh', '-c', 'until nc -z spark-master 7077; do echo "Waiting for Spark..."; sleep 5; done']
       - name: wait-for-db
         image: busybox:1.36
-        command:
-          - 'sh'
-          - '-c'
-          - |
-            until nc -z postgres 5432 && nc -z clickhouse 9000; do
-              echo "Waiting for databases..."
-              sleep 2
-            done
-            echo "Databases are ready"
+        resources:
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+        command: ['sh', '-c', 'until nc -z postgres 5432 && nc -z clickhouse 9000; do echo "Waiting for DBs..."; sleep 2; done']
       containers:
       - name: spark-etl
-        image: ${DOCKERHUB_USERNAME}/hasu-spark-etl:latest
-        imagePullPolicy: Always
+        image: apache/spark:3.5.0
         env:
         - name: SPARK_MASTER
-          value: "spark://spark-master.spark:7077"
-        - name: INPUT_PATH
-          value: "/csv_input"
-        - name: OUTPUT_PATH
-          value: "/shared/processed"
-        - name: MODE
-          value: "full"
+          value: "spark://spark-master:7077"
+        - name: SPARK_APP_NAME
+          value: "CSV_ETL_Hybrid"
         - name: POSTGRES_HOST
           value: "postgres"
-        - name: POSTGRES_PORT
-          value: "5432"
         - name: POSTGRES_DB
           value: "retail_db"
         - name: POSTGRES_USER
@@ -63,10 +54,8 @@ spec:
               key: POSTGRES_PASSWORD
         - name: CLICKHOUSE_HOST
           value: "clickhouse"
-        - name: CLICKHOUSE_PORT
-          value: "9000"
         - name: CLICKHOUSE_DB
-          value: "retail_dw"
+          value: "default"
         - name: CLICKHOUSE_USER
           value: "default"
         - name: CLICKHOUSE_PASSWORD
@@ -74,67 +63,46 @@ spec:
             secretKeyRef:
               name: hasu-ml-secrets
               key: CLICKHOUSE_PASSWORD
-        volumeMounts:
-        - name: csv-input
-          mountPath: /csv_input
-        - name: spark-shared
-          mountPath: /shared
+        - name: SPARK_LOCAL_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
         resources:
           requests:
-            memory: "4Gi"
-            cpu: "2"
+            cpu: "1"
+            memory: "2Gi"
           limits:
-            memory: "8Gi"
-            cpu: "4"
-      volumes:
-      - name: csv-input
-        persistentVolumeClaim:
-          claimName: csv-input-pvc
-      - name: spark-shared
-        persistentVolumeClaim:
-          claimName: spark-shared-pvc
-          namespace: spark
----
-# Alternative: Run only Spark phase
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: spark-only
-  namespace: hasu-ml
-spec:
-  template:
-    spec:
-      restartPolicy: OnFailure
-      initContainers:
-      - name: wait-for-spark
-        image: busybox:1.36
-        command: 
-          - 'sh'
-          - '-c'
-          - |
-            until nc -z spark-master.spark 7077; do
-              echo "Waiting for Spark master..."
-              sleep 5
-            done
-      containers:
-      - name: spark-etl
-        image: ${DOCKERHUB_USERNAME}/hasu-spark-etl:latest
-        imagePullPolicy: Always
-        env:
-        - name: SPARK_MASTER
-          value: "spark://spark-master.spark:7077"
-        - name: MODE
-          value: "spark-only"
+            cpu: "2"
+            memory: "4Gi"
         volumeMounts:
         - name: csv-input
           mountPath: /csv_input
-        - name: spark-shared
-          mountPath: /shared
+        - name: csv-output
+          mountPath: /csv_output
+        # Sử dụng shell script để expand env vars và cấu hình driver IP đúng
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting Spark ETL..."
+          echo "Driver IP: $SPARK_LOCAL_IP"
+          exec /opt/spark/bin/spark-submit \
+            --master "$SPARK_MASTER" \
+            --name "$SPARK_APP_NAME" \
+            --conf "spark.driver.bindAddress=0.0.0.0" \
+            --conf "spark.driver.host=$SPARK_LOCAL_IP" \
+            --conf "spark.driver.port=4040" \
+            --conf "spark.executor.memory=512m" \
+            --conf "spark.executor.cores=1" \
+            --conf "spark.python.worker.memory=256m" \
+            /opt/spark/examples/src/main/python/pi.py
+        # TODO: Thay /opt/spark/examples/src/main/python/pi.py bằng ETL script thực tế
+        # Ví dụ:
+        # - /csv_input/etl_script.py (mount từ PVC)
+        # - Hoặc tạo ConfigMap với ETL script
       volumes:
       - name: csv-input
         persistentVolumeClaim:
           claimName: csv-input-pvc
-      - name: spark-shared
+      - name: csv-output
         persistentVolumeClaim:
-          claimName: spark-shared-pvc
-          namespace: spark
+          claimName: csv-output-pvc

@@ -501,12 +501,12 @@ app-k3s: kubectl-check
 	
 	@echo ""
 	@echo "📁 Step 0: Ensure Spark cluster is ready..."
-	$(KUBECTL_CMD) get pods -n spark 2>/dev/null || (echo "⚠️  Spark not deployed. Running: make spark-deploy" && make spark-deploy)
+	$(KUBECTL_CMD) get pods -n $(NAMESPACE) -l app=spark-master 2>/dev/null | grep -q Running || (echo "⚠️  Spark not deployed. Deploying Spark..." && $(KUBECTL_CMD) apply -f $(K8S_DIR)/spark/)
 	@sleep 5
 	
 	@echo ""
 	@echo "⚡ Step 1: Spark Hybrid ETL (CSV → PostgreSQL → ClickHouse)"
-	@cat $(K8S_DIR)/05-ml-pipeline/job-spark-etl.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@cat $(K8S_DIR)/05-ml-pipeline/job-spark-etl.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	@echo "⏳ Waiting for Spark ETL to complete (5-15 minutes)..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/spark-etl-hybrid -n $(NAMESPACE) --timeout=1800s
 	@echo "✅ Spark ETL complete!"
@@ -515,7 +515,7 @@ app-k3s: kubectl-check
 	@echo "🏗️ Step 2: DBT Build"
 	-$(KUBECTL_CMD) delete job dbt-build -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-dbt-build.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@cat $(K8S_DIR)/05-ml-pipeline/job-dbt-build.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	@echo "⏳ Waiting for DBT to complete..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/dbt-build -n $(NAMESPACE) --timeout=900s
 	@echo "✅ DBT build complete!"
@@ -524,7 +524,7 @@ app-k3s: kubectl-check
 	@echo "🤖 Step 3: ML Training"
 	-$(KUBECTL_CMD) delete job ml-train -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	@echo "⏳ Waiting for training to complete (15-30 minutes)..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train -n $(NAMESPACE) --timeout=3600s
 	@echo "✅ ML training complete!"
@@ -533,7 +533,7 @@ app-k3s: kubectl-check
 	@echo "🔮 Step 4: Generate Predictions"
 	-$(KUBECTL_CMD) delete job ml-predict -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	@echo "⏳ Waiting for predictions..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/ml-predict -n $(NAMESPACE) --timeout=600s
 	@echo "✅ Predictions complete!"
@@ -550,7 +550,7 @@ k3s-csv: kubectl-check
 	@echo "📄 Running CSV Processing on K3s..."
 	-$(KUBECTL_CMD) delete job csv-process -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-csv-process.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@cat $(K8S_DIR)/05-ml-pipeline/job-csv-process.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	$(KUBECTL_CMD) wait --for=condition=complete job/csv-process -n $(NAMESPACE) --timeout=600s
 	@echo "✅ CSV processing complete!"
 
@@ -558,7 +558,7 @@ k3s-sync: kubectl-check
 	@echo "📥 Running Sync on K3s..."
 	-$(KUBECTL_CMD) delete job sync-data -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-sync.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@cat $(K8S_DIR)/05-ml-pipeline/job-sync.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	$(KUBECTL_CMD) wait --for=condition=complete job/sync-data -n $(NAMESPACE) --timeout=600s
 	@echo "✅ Sync complete!"
 
@@ -566,7 +566,7 @@ k3s-dbt: kubectl-check
 	@echo "🏗️ Running DBT on K3s..."
 	-$(KUBECTL_CMD) delete job dbt-build -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-dbt-build.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@cat $(K8S_DIR)/05-ml-pipeline/job-dbt-build.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	$(KUBECTL_CMD) wait --for=condition=complete job/dbt-build -n $(NAMESPACE) --timeout=900s
 	@echo "✅ DBT complete!"
 
@@ -574,7 +574,7 @@ k3s-ml-train: kubectl-check
 	@echo "🤖 Running ML Training on K3s..."
 	-$(KUBECTL_CMD) delete job ml-train -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train -n $(NAMESPACE) --timeout=3600s
 	@echo "✅ Training complete!"
 
@@ -582,7 +582,7 @@ k3s-ml-predict: kubectl-check
 	@echo "🔮 Running ML Predictions on K3s..."
 	-$(KUBECTL_CMD) delete job ml-predict -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	$(KUBECTL_CMD) wait --for=condition=complete job/ml-predict -n $(NAMESPACE) --timeout=600s
 	@echo "✅ Predictions complete!"
 
@@ -650,10 +650,10 @@ spark-deploy: kubectl-check
 	@echo "⏳ Waiting for Spark to be ready..."
 	sleep 10
 	@echo "Checking Spark status..."
-	$(KUBECTL_CMD) get pods -n spark
+	$(KUBECTL_CMD) get pods -n $(NAMESPACE) -l app=spark-master,app=spark-worker
 	@echo ""
 	@echo "✅ Spark cluster deployed!"
-	@echo "   Master UI: kubectl port-forward svc/spark-master 8080:8080 -n spark"
+	@echo "   Master UI: kubectl port-forward svc/spark-master 8080:8080 -n $(NAMESPACE)"
 
 k3s-spark: kubectl-check
 	@echo ""
@@ -667,7 +667,7 @@ k3s-spark: kubectl-check
 	
 	@echo ""
 	@echo "📁 Step 1: Running Spark ETL (Heavy Lifting)..."
-	@cat $(K8S_DIR)/05-ml-pipeline/job-spark-etl.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@cat $(K8S_DIR)/05-ml-pipeline/job-spark-etl.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	@echo "⏳ Waiting for Spark ETL to complete (this may take 5-15 minutes)..."
 	$(KUBECTL_CMD) wait --for=condition=complete job/spark-etl-hybrid -n $(NAMESPACE) --timeout=1800s
 	@echo "✅ Spark ETL complete!"
@@ -675,26 +675,101 @@ k3s-spark: kubectl-check
 	@echo ""
 	@echo "Next steps:"
 	@echo "  - Check results: kubectl logs -n $(NAMESPACE) job/spark-etl-hybrid"
-	@echo "  - View processed data: kubectl exec -n spark deployment/spark-worker -- ls -la /shared/processed"
+	@echo "  - View processed data: kubectl exec -n $(NAMESPACE) deployment/spark-worker -- ls -la /shared/processed"
 
 spark-status:
 	@echo "🔥 Spark Cluster Status"
 	@echo "======================="
 	@echo "Pods in spark namespace:"
-	$(KUBECTL_CMD) get pods -n spark
+	$(KUBECTL_CMD) get pods -n $(NAMESPACE) -l app=spark-master,app=spark-worker
 	@echo ""
 	@echo "Services:"
-	$(KUBECTL_CMD) get svc -n spark
+	$(KUBECTL_CMD) get svc -n $(NAMESPACE) spark-master
 
 spark-logs:
 	@echo "📜 Spark Master Logs:"
-	$(KUBECTL_CMD) logs -n spark deployment/spark-master --tail=50
+	$(KUBECTL_CMD) logs -n $(NAMESPACE) deployment/spark-master --tail=50
 	@echo ""
 	@echo "📜 Spark Worker Logs:"
-	$(KUBECTL_CMD) logs -n spark deployment/spark-worker --tail=50
+	$(KUBECTL_CMD) logs -n $(NAMESPACE) deployment/spark-worker --tail=50
 
 spark-delete:
 	@echo "⚠️  Deleting Spark cluster..."
 	$(KUBECTL_CMD) delete namespace spark --ignore-not-found=true
 	@echo "✅ Spark cluster deleted"
 
+
+# ============================================================================
+# GPU ML TRAINING
+# ============================================================================
+
+# Run ML training with GPU on K3s
+k3s-ml-train-gpu: kubectl-check
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║           🤖 Running ML Training with GPU on K3s                     ║"
+	@echo "║           Target: k3s-worker-gpu (RTX 3060)                          ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	-$(KUBECTL_CMD) delete job ml-train-gpu -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train-gpu.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@echo "⏳ Waiting for GPU training to complete..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train-gpu -n $(NAMESPACE) --timeout=3600s
+	@echo "✅ GPU Training complete!"
+
+# Install NVIDIA Device Plugin (run once)
+install-gpu-plugin: kubectl-check
+	@echo "📦 Installing NVIDIA Device Plugin..."
+	@bash $(K8S_DIR)/scripts/install-gpu-operator.sh
+
+# Check GPU status on cluster
+k3s-gpu-status: kubectl-check
+	@echo "🎮 GPU Status"
+	@echo "============="
+	@echo ""
+	@echo "Nodes with GPU:"
+	@kubectl get nodes -o json | jq -r '.items[] | select(.status.capacity | has("nvidia.com/gpu")) | "  \(.metadata.name): \(.status.capacity."nvidia.com/gpu") GPUs"' 2>/dev/null || kubectl get nodes -o custom-columns=NAME:.metadata.name,GPU:.status.capacity.nvidia\.com/gpu
+	@echo ""
+	@echo "GPU Pods:"
+	@kubectl get pods --all-namespaces -o json | jq -r '.items[] | select(.spec.containers[].resources.limits | has("nvidia.com/gpu")) | "  \(.metadata.namespace)/\(.metadata.name)"' 2>/dev/null || echo "  (No GPU pods found)"
+
+# Build and push GPU image
+build-push-gpu: check-env
+	@echo "🐳 Building GPU image..."
+	@docker build -f ml_pipeline/Dockerfile.gpu -t $(DOCKERHUB_USERNAME)/hasu-ml-pipeline:gpu-latest ml_pipeline/
+	@echo "📤 Pushing GPU image to Docker Hub..."
+	@docker push $(DOCKERHUB_USERNAME)/hasu-ml-pipeline:gpu-latest
+	@echo "✅ GPU image pushed!"
+
+# ============================================================================
+# GPU TRAINING (Workaround - không cần NVIDIA Device Plugin)
+# ============================================================================
+
+# Run ML training with GPU using privileged mode (workaround)
+k3s-ml-train-gpu: kubectl-check
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║           🤖 Running ML Training with GPU (Workaround Mode)          ║"
+	@echo "║           Target: k3s-worker-gpu (RTX 3060)                          ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "⚠️  Sử dụng privileged mode để access GPU trực tiếp"
+	@echo ""
+	-$(KUBECTL_CMD) delete job ml-train-gpu -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train-gpu-workaround.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
+	@echo "⏳ Waiting for GPU training to complete..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train-gpu -n $(NAMESPACE) --timeout=3600s
+	@echo "✅ GPU Training complete!"
+
+# Check GPU job logs
+k3s-ml-gpu-logs: kubectl-check
+	@echo "📜 GPU Training Logs:"
+	$(KUBECTL_CMD) logs -n $(NAMESPACE) job/ml-train-gpu --tail=100
+
+# Check if GPU is detected inside container
+k3s-gpu-test: kubectl-check
+	@echo "🎮 Testing GPU inside container..."
+	$(KUBECTL_CMD) run gpu-test -n $(NAMESPACE) --image=nvidia/cuda:12.1.0-base-ubuntu22.04 --rm -it --restart=Never -- nvidia-smi || \
+	echo "⚠️  Không thể chạy nvidia-smi trong container (có thể cần cấu hình thêm)"
