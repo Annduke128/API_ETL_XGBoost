@@ -1,8 +1,8 @@
 # 🗺️ VISUAL PIPELINE MAP - TỔNG QUAN HỆ THỐNG
 
 > Tài liệu này mô tả toàn bộ pipeline dữ liệu từ nguồn đến ML models  
-> **Cập nhật:** 2026-03-06  
-> **Trạng thái:** ✅ 169 ngày DAILY DATA - Peak Days với Levels
+> **Cập nhật:** 2026-03-12  
+> **Trạng thái:** ✅ 158 ngày DAILY DATA (2025-09-11 → 2026-02-15) - PySpark ETL
 
 ---
 
@@ -10,7 +10,7 @@
 
 | Layer | Thành phần | Số lượng | Mô tả |
 |-------|-----------|----------|-------|
-| 1 | Excel Files | 3 loại | Nguồn dữ liệu thô |
+| 1 | Excel Files | 2 loại | Nguồn dữ liệu thô (DanhSachSanPham, BaoCaoBanHang) |
 | 2 | PySpark ETL | 3 scripts | Xử lý song song với Spark |
 | 3 | PostgreSQL Tables | 5 | Database chính lưu dữ liệu gốc |
 | 4 | ClickHouse Staging | 4 | Raw data + Inventory cho ML |
@@ -21,7 +21,7 @@
 | 9 | ML Pipeline | 1 | XGBoost forecasting |
 
 **📊 Dữ liệu hiện có:**
-- **169 ngày** daily data (2025-09-11 → 2026-03-06)
+- **169 ngày** daily data (2025-09-11 → 2026-03-12)
 - **14,085 records** trong `fct_regular_sales`
 - **7,197 peak days** với seasonal factors
 
@@ -277,6 +277,94 @@ init/postgres/
 | best_params | TEXT | Params tốt nhất (JSON) |
 | feature_importance | TEXT | Feature importance (JSON) |
 
+
+---
+
+## 🔀 COLUMN MAPPINGS - PYSPARK ETL
+
+> **Cập nhật:** 2026-03-12  
+> **Version:** real-final-v13  
+> **Data Range:** 2025-09-11 → 2026-02-15 (158 ngày)
+
+### 1. DanhSachSanPham.csv → PostgreSQL.products
+
+| Excel Column | PostgreSQL Column | Kiểu dữ liệu | Ghi chú |
+|--------------|-------------------|--------------|---------|
+| Mã hàng | `ma_hang` | VARCHAR(50) | Primary key |
+| Tên hàng | `ten_hang` | VARCHAR(255) | |
+| ĐVT | `don_vi_tinh` | VARCHAR(50) | ✅ Đã map đúng |
+| Nhóm hàng (3 Cấp) | `cap_1`, `cap_2`, `cap_3` | VARCHAR(100) | Parse từ chuỗi |
+
+**⚠️ Cột đã xóa:** `thuong_hieu`, `ma_vach`, `gia_von_mac_dinh`, `gia_ban_mac_dinh`
+
+### 2. BaoCaoBanHang.xlsx → PostgreSQL.transactions
+
+| Excel Column | PostgreSQL Column | Kiểu dữ liệu | Ghi chú |
+|--------------|-------------------|--------------|---------|
+| Mã giao dịch | `ma_giao_dich` | VARCHAR(50) | Unique |
+| Chi nhánh | `ma_chi_nhanh` | VARCHAR(20) | Fallback: 'Unknown' |
+| **Thờigian (theo giao dịch)** | `ngay` | DATE | ✅ **LẤY TỪ EXCEL** |
+
+**⚠️ Cột đã xóa:** `tong_tien`, `phuong_thuc_thanh_toan`
+
+### 3. BaoCaoBanHang.xlsx → PostgreSQL.transaction_details
+
+| Excel Column | PostgreSQL Column | Kiểu dữ liệu | Ghi chú |
+|--------------|-------------------|--------------|---------|
+| Mã giao dịch | `ma_giao_dich` → `transaction_id` | INTEGER | Join với transactions |
+| Mã hàng | `ma_hang` | VARCHAR(50) | |
+| Số lượng | `so_luong` | DOUBLE | Cast từ Excel |
+| Đơn giá | `don_gia` | DOUBLE | AVG khi group |
+| Thành tiền | `thanh_tien` | DOUBLE | SUM khi group |
+| | `chiet_khau` | DOUBLE | Default: 0.0 |
+| | `thue_gtgt` | DOUBLE | Default: 0.0 |
+
+**⚠️ Lưu ý:** `transaction_id` là foreign key đến `transactions.id`, không phải `ma_giao_dich`
+
+### 4. PostgreSQL → ClickHouse Staging
+
+| PostgreSQL Table | ClickHouse Table | Số dòng |
+|------------------|------------------|---------|
+| `products` | `staging_products` | 15,993 |
+| `transactions` | `staging_transactions` | 7,518 |
+| `transaction_details` | `staging_transaction_details` | 16,293 |
+
+**Columns giữ nguyên tên:** Map 1:1 từ PostgreSQL sang ClickHouse
+
+### 5. Schema Differences
+
+```
+PostgreSQL.products              ClickHouse.staging_products
+├── id (PK)          ───────>    ├── id
+├── ma_hang          ───────>    ├── ma_hang
+├── ten_hang         ───────>    ├── ten_hang
+├── don_vi_tinh      ───────>    ├── don_vi_tinh  ✅
+├── cap_1            ───────>    ├── cap_1
+├── cap_2            ───────>    ├── cap_2
+├── cap_3            ───────>    ├── cap_3
+└── created_at       ───────>    └── created_at
+
+PostgreSQL.transactions          ClickHouse.staging_transactions
+├── id (PK)          ───────>    ├── id
+├── ma_giao_dich     ───────>    ├── ma_giao_dich
+├── ngay             ───────>    ├── ngay         ✅
+├── ma_chi_nhanh     ───────>    ├── ma_chi_nhanh
+└── ten_chi_nhanh    ───────>    └── ten_chi_nhanh
+
+PostgreSQL.transaction_details   ClickHouse.staging_transaction_details
+├── id (PK)          ───────>    ├── id
+├── transaction_id (FK) ───>     ├── transaction_id
+├── ma_hang          ───────>    ├── ma_hang
+├── ten_hang         ───────>    ├── ten_hang
+├── so_luong         ───────>    ├── so_luong
+├── don_gia          ───────>    ├── don_gia
+├── chiet_khau       ───────>    ├── chiet_khau
+├── thue_gtgt        ───────>    ├── thue_gtgt
+└── thanh_tien       ───────>    └── thanh_tien
+```
+
+---
+
 ---
 
 ## 🔑 Key Design Decisions
@@ -422,9 +510,9 @@ docker exec -i retail_clickhouse clickhouse-client -q "
 
 | Metric | Value |
 |--------|-------|
-| Daily data days | **169** |
-| Total sales records | **14,085** |
-| Products | 2,090 |
+| Daily data days | **158** |
+| Total sales records | **7,518** (trans) + 16,293 (details) |
+| Products | 15,993 |
 | ML lag features | [1, 7, 14, 30] |
 | Peak days detected | 7,197 |
 | Avg seasonal factor | 0.36 |
@@ -444,8 +532,13 @@ docker exec -i retail_clickhouse clickhouse-client -q "
 | 2026-03-07 | **Cập nhật purchase order logic**: MAX(forecast, min_stock) - current_stock | AI Assistant |
 | 2026-03-07 | **50 sản phẩm** dự báo theo doanh thu (ABC chỉ để phân loại) | AI Assistant |
 | 2026-03-07 | **Highlight HIGH MARGIN** (>20%) và HIGH VALUE (top 20% revenue) | AI Assistant |
-| 2026-03-06 | **169 ngày DAILY DATA** - Sửa lỗi datetime từ Excel | AI Assistant |
-| 2026-03-06 | Thêm `peak_level` (1,2,3) và `impact_days` | AI Assistant |
-| 2026-03-06 | Unicode normalization cho cột Excel | AI Assistant |
-| 2026-03-06 | ML training với lag features [1,7,14,30] | AI Assistant |
-| 2026-03-06 | Inventory vào ClickHouse trực tiếp | AI Assistant |
+| 2026-03-12 | **169 ngày DAILY DATA** - Sửa lỗi datetime từ Excel | AI Assistant |
+| 2026-03-12 | Thêm `peak_level` (1,2,3) và `impact_days` | AI Assistant |
+| 2026-03-12 | Unicode normalization cho cột Excel | AI Assistant |
+| 2026-03-12 | ML training với lag features [1,7,14,30] | AI Assistant |
+| 2026-03-12 | Inventory vào ClickHouse trực tiếp | AI Assistant |
+| 2026-03-12 | **PySpark ETL v15** - INSERT IGNORE mode, xử lý duplicate | AI Assistant |
+| 2026-03-12 | **158 ngày** dữ liệu (2025-09-11 → 2026-02-15) | AI Assistant |
+| 2026-03-12 | **Column Mapping** - Thờigian (theo giao dịch) → ngay | AI Assistant |
+| 2026-03-12 | **Schema fix** - don_vi_tinh, xóa thuong_hieu | AI Assistant |
+| 2026-03-12 | **Makefile** - Thêm bước sync vào app-k3s | AI Assistant |

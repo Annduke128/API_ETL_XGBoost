@@ -639,77 +639,104 @@ image: ${DOCKERHUB_USERNAME}/hasu-ml-pipeline:latest  # Docker Hub
 
 ---
 
-## 🔥 PySpark ETL (Mới)
+## 🔥 Python ETL Pipeline
 
 ### Tổng quan
 
-Hệ thống hỗ trợ **PySpark ETL** để xử lý song parallel các file Excel (Products, Inventory, Sales), tận dụng sức mạnh multi-core của Spark cluster.
+ETL Pipeline sử dụng **Python + PySpark** để xử lý dữ liệu CSV/Excel, ghi vào PostgreSQL (OLTP), sau đó đồng bộ lên ClickHouse (OLAP/DW).
 
-### File PySpark ETL
+### Kiến trúc ETL
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   CSV/Excel     │────▶│   Python ETL     │────▶│   PostgreSQL    │
+│   Input Files   │     │   (PySpark)      │     │   (OLTP)        │
+└─────────────────┘     └──────────────────┘     └────────┬────────┘
+         │                                                │
+         │          ┌──────────────────────┐              │
+         │          │   Column Mapping     │              │
+         │          │   - ĐVT→don_vi_tinh  │              │
+         │          │   - Mã hàng→ma_hang  │              │
+         └─────────▶│   - Thờigian→ngay    │◄─────────────┘
+                    └──────────────────────┘              │
+                                                          ▼
+                                                  ┌─────────────────┐
+                                                  │   ClickHouse    │
+                                                  │   (OLAP/DW)     │
+                                                  └─────────────────┘
+```
+
+### File ETL chính
 
 ```
 spark-etl/python_etl/
-├── import_products_spark.py      # Import DanhSachSanPham (parallel)
-├── import_inventory_spark.py     # Import BaoCaoXuatNhapTon (parallel)
-└── import_sales_spark.py         # Import BaoCaoBanHang (parallel)
+├── etl_main.py              # Main ETL script (sử dụng hiện tại)
+├── import_products.py       # Import DanhSachSanPham
+└── sync_to_clickhouse.py    # Sync PostgreSQL → ClickHouse
 ```
 
-### Cách Toggle PySpark/Pandas
+### Luồng xử lý
 
-```python
-# data_cleaning/smart_processor.py line 20
-USE_SPARK = True   # Dùng PySpark (song song)
-USE_SPARK = False  # Dùng Pandas (đơn luồng)
-```
+| Bước | File nguồn | Xử lý | Đích |
+|------|-----------|-------|------|
+| 1 | `DanhSachSanPham*.csv` | Parse nhóm hàng 3 cấp, mapping cột | PostgreSQL `products` |
+| 2 | `BaoCaoBanHang*.xlsx` | Trích xuất giao dịch, chi tiết | PostgreSQL `transactions` + `transaction_details` |
+| 3 | PostgreSQL tables | Type casting, NULL handling | ClickHouse staging tables |
 
-### Ưu điểm PySpark
+### Column Mapping
 
-| Yếu tố | Pandas | PySpark | Cải thiện |
-|--------|--------|---------|-----------|
-| **Processing** | Single-thread | Multi-core | 3-5x faster |
-| **Memory** | Load toàn bộ | Distributed | Không OOM |
-| **Scalability** | 1 node | Cluster | Unlimited |
-| **10K rows** | 5s | 2s | 2.5x |
-| **100K rows** | 30s | 8s | 3.75x |
-| **1M rows** | ❌ OOM | 45s | ∞ |
+| CSV Column | DB Column | Ghi chú |
+|------------|-----------|---------|
+| Mã hàng | ma_hang | Primary key |
+| Tên hàng | ten_hang | Product name |
+| Nhóm hàng(3 Cấp) | cap_1, cap_2, cap_3 | Parse từ chuỗi |
+| ĐVT | don_vi_tinh | Đơn vị tính |
+| Mã giao dịch | ma_giao_dich | Transaction ID |
+| Thờigian | ngay | Date |
+| SL | so_luong | Quantity |
+| Giá bán/SP | don_gia | Unit price |
+| Chi nhánh | ma_chi_nhanh | Branch code |
 
-### Chạy PySpark ETL
+### Commands
 
+**K3s:**
 ```bash
-# 1. Khởi động Spark cluster
-cd docker && docker-compose --profile spark up -d
+# Chạy ETL
+make k3s-spark-etl      # Chạy ETL job
+make k3s-spark          # Interactive mode
 
-# 2. Ensure USE_SPARK = True trong smart_processor.py
+# Xem logs
+kubectl logs -n hasu-ml job/spark-etl -f
 
-# 3. Chạy pipeline
-cd .. && make smart-process
+# Full pipeline
+make app-k3s            # ETL → DBT → ML
 ```
 
-### Build Docker Image
-
+**Docker (Development):**
 ```bash
 cd docker
-docker-compose --profile spark build spark-etl
+make sync-to-ch         # Sync PostgreSQL → ClickHouse
 ```
 
-### Chi tiết kỹ thuật
+### Performance
 
-- **Parallel Processing**: PySpark tự động phân chia data thành partitions, mỗi partition chạy song song trên 1 core
-- **JDBC Parallel Write**: Ghi song song nhiều partitions vào PostgreSQL
-- **Adaptive Query Execution**: Tự động optimize execution plan
+| Dataset | Records | Thờigian |
+|---------|---------|----------|
+| Products | ~16,000 | ~2s |
+| Transactions | ~7,500 | ~3s |
+| Transaction Details | ~16,000 | ~3s |
+| **Total** | **~40,000** | **~5-10s** |
 
-### Khi nào dùng PySpark?
+### Docker Image
 
-| Trường hợp | Khuyến nghị |
-|------------|-------------|
-| < 10K rows/ngày | Pandas (đơn giản) |
-| 10K - 100K rows/ngày | PySpark (nhanh hơn) |
-| > 100K rows/ngày | PySpark (bắt buộc) |
-| Multiple files cùng lúc | PySpark (song song) |
+```bash
+# Image hiện tại
+docker pull annduke/hasu-spark-etl:real-final
 
-### References
-
-- Xem chi tiết: `PYSPARK_ETL_README.md`
+# Build lại (nếu cần)
+cd spark-etl
+docker build -t hasu-spark-etl:latest .
+```
 
 ---
 

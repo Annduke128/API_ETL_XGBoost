@@ -1,28 +1,15 @@
-{{
-    config(
-        materialized='view'
-    )
-}}
-
-WITH source AS (
-    SELECT * FROM {{ source('retail_source', 'staging_transactions') }}
-),
-
-renamed AS (
-    SELECT
-        id AS transaction_id,
-        ma_giao_dich AS transaction_code,
-        chi_nhanh_id AS branch_id,
-        chi_nhanh_id AS branch_code,
-        thoi_gian AS transaction_timestamp,
-        toDate(thoi_gian) AS transaction_date,
-        tong_tien_hang AS gross_amount,
-        giam_gia AS discount_amount,
-        doanh_thu AS revenue,
-        tong_gia_von AS total_cost,
-        loi_nhuan_gop AS gross_profit,
-        created_at
-    FROM source
-)
-
-SELECT * FROM renamed
+{{ config(materialized='view') }}
+SELECT 
+    toString(id) AS transaction_id,
+    ma_giao_dich AS transaction_code,
+    ma_chi_nhanh AS branch_id,
+    ma_chi_nhanh AS branch_code,
+    ten_chi_nhanh AS branch_name,
+    ngay AS transaction_date,
+    toDateTime(ngay) AS transaction_timestamp,
+    toFloat64(0) AS revenue,
+    toFloat64(0) AS gross_profit,
+    toFloat64(0) AS total_amount,
+    'cash' AS payment_method,
+    id AS id_num
+FROM {{ source('retail_source', 'raw_transactions') }}

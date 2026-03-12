@@ -556,3 +556,212 @@ env:
 |------|-------|----------------|
 | 2026-03-05 | Tạo tài liệu | Kimi AI |
 | 2026-03-10 | Thêm lỗi 9, 10, 11 - Executor connection, Cluster mode Python, Resources mismatch | Kimi AI |
+
+### ❌ Lỗi 12: DBT Build Job timeout/thiếu volumes
+
+**Triệu chứng:**
+```
+error: timed out waiting for the condition on jobs/dbt-build
+# hoặc
+Error: Invalid value for '--profiles-dir': Path '/root/.dbt' does not exist.
+```
+
+**Nguyên nhân:**
+- Job `job-dbt-build.yaml` thiếu volume mounts cho DBT config files
+- Chỉ có `envFrom` nhưng không mount `dbt-profiles` ConfigMap
+- ConfigMaps mount trực tiếp tạo file với `..data` prefix gây lỗi
+
+**Giải pháp:**
+
+1. **Sử dụng initContainer để copy files:**
+```yaml
+initContainers:
+- name: setup-dbt
+  image: busybox:1.36
+  resources:
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+  command: ["sh", "-c"]
+  args:
+  - |
+    mkdir -p /workspace/models/staging /root/.dbt
+    cp /tmp/profiles/profiles.yml /root/.dbt/
+    cp /tmp/project/dbt_project.yml /workspace/
+    for f in /tmp/models/*.sql; do
+      [ -f "$f" ] && cp "$f" /workspace/models/staging/
+    done
+  volumeMounts:
+  - name: dbt-profiles-tmp
+    mountPath: /tmp/profiles
+  - name: workspace
+    mountPath: /workspace
+  - name: dbt-home
+    mountPath: /root/.dbt
+```
+
+2. **Mount volumes đúng cách:**
+```yaml
+volumes:
+- name: dbt-profiles-tmp
+  configMap:
+    name: dbt-profiles
+- name: dbt-project-tmp
+  configMap:
+    name: dbt-project-files
+- name: dbt-models-tmp
+  configMap:
+    name: dbt-models-staging
+- name: workspace
+  emptyDir: {}
+- name: dbt-home
+  emptyDir: {}
+```
+
+3. **Lưu ý cho file thuộc về root:**
+```bash
+# File thuộc về root, dùng sudo tee để ghi
+sudo tee k8s/05-ml-pipeline/job-dbt-build.yaml > /dev/null << 'YAML'
+[content]
+YAML
+```
+
+**Best Practice:**
+- Luôn dùng initContainer khi cần xử lý files từ ConfigMaps
+- Dùng emptyDir để share files giữa initContainer và main container
+- Copy files selectively để tránh "..data" prefix files
+
+---
+
+### ❌ Lỗi 13: InvalidImageName với ${DOCKERHUB_USERNAME}
+
+**Triệu chứng:**
+```
+Failed to apply default image tag "${DOCKERHUB_USERNAME}/hasu-dbt:latest": 
+couldn't parse image name: invalid reference format
+```
+
+**Nguyên nhân:**
+- Makefile dùng `envsubst` để replace variables nhưng job được apply trực tiếp
+- Biến `${DOCKERHUB_USERNAME}` không được expand
+
+**Giải pháp:**
+
+1. **Replace trực tiếp khi apply:**
+```bash
+cat job-dbt-build.yaml | sed 's|${DOCKERHUB_USERNAME}|annduke|g' | kubectl apply -f -
+```
+
+2. **Hoặc hardcode image name trong file:**
+```yaml
+image: annduke/hasu-dbt:latest
+```
+
+**Best Practice:**
+- Kiểm tra image name sau khi apply: `kubectl get job -o yaml | grep image:`
+- Dùng `envsubst` trong Makefile hoặc sed để replace variables
+
+
+### ❌ Lỗi 14: Makefile tạo job "dbt-build" not found
+
+**Triệu chứng:**
+```
+🏗️ Step 2: DBT Build
+k3s kubectl delete job dbt-build -n hasu-ml 2>/dev/null || true
+cronjob.batch/dbt-daily configured
+⏳ Waiting for DBT to complete...
+k3s kubectl wait --for=condition=complete job/dbt-build -n hasu-ml --timeout=900s
+Error from server (NotFound): jobs.batch "dbt-build" not found
+make: *** [Makefile:520: app-k3s] Error 1
+```
+
+**Nguyên nhân:**
+- File `job-dbt-build.yaml` bị ghi đè bằng **CronJob** thay vì **Job**
+- Makefile tìm Job `dbt-build` nhưng trong file lại là CronJob `dbt-daily`
+- Tên resource không khớp: Job vs CronJob
+
+**Giải pháp:**
+
+1. **Tách biệt 2 file riêng:**
+```bash
+# File 1: job-dbt-build.yaml (cho Makefile)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dbt-build  # ← Phải là Job, không phải CronJob
+  namespace: hasu-ml
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      # ... full config với initContainers và volumes
+
+# File 2: cronjob-dbt-daily.yaml (chạy định kỳ)  
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dbt-daily  # ← Tên khác, loại khác
+  namespace: hasu-ml
+spec:
+  schedule: "0 3 * * *"
+  jobTemplate:
+    spec:
+      # ... config tương tự
+```
+
+2. **Kiểm tra trước khi commit:**
+```bash
+# Kiểm tra loại resource
+grep "^kind:" k8s/05-ml-pipeline/job-dbt-build.yaml
+# Phải ra: kind: Job
+
+# Kiểm tra tên
+grep "^  name:" k8s/05-ml-pipeline/job-dbt-build.yaml
+# Phải ra: name: dbt-build
+```
+
+3. **Nếu file đã bị ghi đè:**
+```bash
+# Tạo lại từ config đúng
+sudo cp /tmp/job-dbt-build-new.yaml k8s/05-ml-pipeline/job-dbt-build.yaml
+```
+
+**Best Practice:**
+- Luôn dùng tên file phản ánh đúng loại resource
+- `job-*.yaml` → chỉ chứa Job
+- `cronjob-*.yaml` → chỉ chứa CronJob
+- Kiểm tra git diff trước khi commit
+
+---
+
+### ❌ Lỗi 15: DBT staging tables not found trong ClickHouse
+
+**Triệu chứng:**
+```
+Database Error in model stg_products
+Unknown table expression identifier 'retail_dw.staging_products'
+```
+
+**Nguyên nhân:**
+- DBT models cố đọc từ `retail_dw.staging_*` tables
+- Nhưng các bảng này chưa được tạo trong ClickHouse
+- Cần sync data từ PostgreSQL sang ClickHouse trước
+
+**Giải pháp:**
+
+1. **Chạy sync job trước:**
+```bash
+make k3s-sync  # Sync PostgreSQL → ClickHouse
+```
+
+2. **Hoặc bỏ qua lỗi (models vẫn được tạo):**
+```bash
+# DBT vẫn tạo được 12/15 models dù có lỗi
+# Các models không phụ thuộc staging tables sẽ OK
+```
+
+**Lưu ý:** Đây không phải lỗi cấu hình, mà là thứ tự chạy pipeline.
+

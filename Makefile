@@ -60,7 +60,8 @@ help:
 	@echo "║  KUBERNETES / K3S                                                ║"
 	@echo "║    make app-k3s         - 🚀 Run FULL pipeline on K3s            ║"
 	@echo "║    make build-push-k3s  - 🐳 Build & push images (DOCKERHUB_)    ║"
-	@echo "║    make k3s-spark       - ⚡ Spark ETL (Hybrid)                  ║"
+	@echo "║    make k3s-spark       - ⚡ Spark Full Pipeline (Interactive)   ║"
+	@echo "║    make k3s-spark-etl   - ⚡ Spark ETL Job only                  ║"
 	@echo "║    make k3s-csv         - Process CSV files on K3s               ║"
 	@echo "║    make k3s-sync        - Run Sync job on K3s                    ║"
 	@echo "║    make k3s-dbt         - Run DBT build on K3s                   ║"
@@ -506,10 +507,21 @@ app-k3s: kubectl-check
 	
 	@echo ""
 	@echo "⚡ Step 1: Spark Hybrid ETL (CSV → PostgreSQL → ClickHouse)"
+	-$(KUBECTL_CMD) delete job spark-etl -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
 	@cat $(K8S_DIR)/05-ml-pipeline/job-spark-etl.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	@echo "⏳ Waiting for Spark ETL to complete (5-15 minutes)..."
-	$(KUBECTL_CMD) wait --for=condition=complete job/spark-etl-hybrid -n $(NAMESPACE) --timeout=1800s
+	$(KUBECTL_CMD) wait --for=condition=complete job/spark-etl -n $(NAMESPACE) --timeout=1800s
 	@echo "✅ Spark ETL complete!"
+	
+	@echo ""
+	@echo "🔄 Step 1.5: Sync PostgreSQL → ClickHouse"
+	-$(KUBECTL_CMD) delete job sync-data -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
+	@cat $(K8S_DIR)/05-ml-pipeline/job-sync.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
+	@echo "⏳ Waiting for sync to complete..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/sync-data -n $(NAMESPACE) --timeout=600s
+	@echo "✅ Sync complete!"
 	
 	@echo ""
 	@echo "🏗️ Step 2: DBT Build"
@@ -585,6 +597,15 @@ k3s-ml-predict: kubectl-check
 	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	$(KUBECTL_CMD) wait --for=condition=complete job/ml-predict -n $(NAMESPACE) --timeout=600s
 	@echo "✅ Predictions complete!"
+
+k3s-spark-etl: kubectl-check
+	@echo "⚡ Running Spark ETL on K3s..."
+	-$(KUBECTL_CMD) delete job spark-etl -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
+	@cat $(K8S_DIR)/05-ml-pipeline/job-spark-etl.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
+	@echo "⏳ Waiting for Spark ETL to complete (5-15 minutes)..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/spark-etl -n $(NAMESPACE) --timeout=1800s
+	@echo "✅ Spark ETL complete!"
 
 # Copy CSV files to K3s PVC
 k3s-copy-csv: kubectl-check
@@ -667,14 +688,16 @@ k3s-spark: kubectl-check
 	
 	@echo ""
 	@echo "📁 Step 1: Running Spark ETL (Heavy Lifting)..."
+	-$(KUBECTL_CMD) delete job spark-etl -n $(NAMESPACE) 2>/dev/null || true
+	@sleep 2
 	@cat $(K8S_DIR)/05-ml-pipeline/job-spark-etl.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
 	@echo "⏳ Waiting for Spark ETL to complete (this may take 5-15 minutes)..."
-	$(KUBECTL_CMD) wait --for=condition=complete job/spark-etl-hybrid -n $(NAMESPACE) --timeout=1800s
+	$(KUBECTL_CMD) wait --for=condition=complete job/spark-etl -n $(NAMESPACE) --timeout=1800s
 	@echo "✅ Spark ETL complete!"
 	
 	@echo ""
 	@echo "Next steps:"
-	@echo "  - Check results: kubectl logs -n $(NAMESPACE) job/spark-etl-hybrid"
+	@echo "  - Check results: kubectl logs -n $(NAMESPACE) job/spark-etl"
 	@echo "  - View processed data: kubectl exec -n $(NAMESPACE) deployment/spark-worker -- ls -la /shared/processed"
 
 spark-status:
@@ -741,27 +764,6 @@ build-push-gpu: check-env
 	@echo "📤 Pushing GPU image to Docker Hub..."
 	@docker push $(DOCKERHUB_USERNAME)/hasu-ml-pipeline:gpu-latest
 	@echo "✅ GPU image pushed!"
-
-# ============================================================================
-# GPU TRAINING (Workaround - không cần NVIDIA Device Plugin)
-# ============================================================================
-
-# Run ML training with GPU using privileged mode (workaround)
-k3s-ml-train-gpu: kubectl-check
-	@echo ""
-	@echo "╔══════════════════════════════════════════════════════════════════════╗"
-	@echo "║           🤖 Running ML Training with GPU (Workaround Mode)          ║"
-	@echo "║           Target: k3s-worker-gpu (RTX 3060)                          ║"
-	@echo "╚══════════════════════════════════════════════════════════════════════╝"
-	@echo ""
-	@echo "⚠️  Sử dụng privileged mode để access GPU trực tiếp"
-	@echo ""
-	-$(KUBECTL_CMD) delete job ml-train-gpu -n $(NAMESPACE) 2>/dev/null || true
-	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train-gpu-workaround.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
-	@echo "⏳ Waiting for GPU training to complete..."
-	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train-gpu -n $(NAMESPACE) --timeout=3600s
-	@echo "✅ GPU Training complete!"
 
 # Check GPU job logs
 k3s-ml-gpu-logs: kubectl-check

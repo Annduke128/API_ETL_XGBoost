@@ -1,45 +1,25 @@
-{{
-    config(
-        materialized='view'
-    )
-}}
+{{ config(materialized='view') }}
 
-WITH source AS (
-    SELECT * FROM {{ source('retail_source', 'staging_transaction_details') }}
-),
-
-products_ref AS (
-    SELECT 
-        id AS product_id,
-        ma_hang AS product_code,
-        ten_hang AS product_name,
-        thuong_hieu AS brand,
-        nhom_hang_cap_1 AS category_l1,
-        nhom_hang_cap_2 AS category_l2
-    FROM {{ source('retail_source', 'staging_products') }}
-),
-
-renamed AS (
-    SELECT
-        s.id AS detail_id,
-        s.giao_dich_id AS transaction_id,
-        s.product_id,
-        p.product_code,
-        p.product_name,
-        p.brand,
-        p.category_l1,
-        p.category_l2,
-        s.so_luong AS quantity,
-        s.gia_ban AS unit_price,
-        s.gia_ban AS selling_price,
-        s.gia_von AS cost_price,
-        (s.gia_ban * s.so_luong) AS line_revenue,
-        (s.gia_von * s.so_luong) AS line_cost,
-        toFloat64OrNull(s.loi_nhuan) AS line_profit,
-        toFloat64OrNull(s.tong_loi_nhuan) AS total_line_profit,
-        s.created_at
-    FROM source s
-    LEFT JOIN products_ref p ON s.product_id = p.product_id
-)
-
-SELECT * FROM renamed
+SELECT 
+    toString(d.transaction_id) || '-' || d.ma_hang AS detail_id,
+    toString(d.transaction_id) AS transaction_id,
+    d.ma_hang AS product_code,
+    d.ten_hang AS product_name,
+    '' AS brand,
+    '' AS category_l1,
+    '' AS category_l2,
+    d.so_luong AS quantity,
+    d.don_gia AS unit_price,
+    d.don_gia AS selling_price,
+    d.chiet_khau AS discount_amount,
+    d.thue_gtgt AS tax_amount,
+    d.thanh_tien AS line_total,
+    toFloat64(0) AS line_revenue,
+    toFloat64(0) AS line_cost,
+    toFloat64(0) AS line_profit,
+    toFloat64(0) AS cost_price,
+    t.transaction_date,
+    t.branch_code
+FROM {{ source('retail_source', 'raw_transaction_details') }} d
+JOIN {{ ref('stg_transactions') }} t 
+    ON d.transaction_id = t.id_num

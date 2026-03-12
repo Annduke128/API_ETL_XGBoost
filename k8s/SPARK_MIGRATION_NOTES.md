@@ -163,3 +163,113 @@ args:
 **Last Updated:** 2026-03-10  
 **Status:** ✅ Spark cluster hoạt động tốt trong hasu-ml namespace  
 **Job Status:** ✅ ETL Job chạy thành công (Completed)
+
+---
+
+## 🕐 Timeline Update (2026-03-10 tiếp)
+
+```
+[05:00] ❌ DBT Build Job timeout
+        → Nguyên nhân: Thiếu volume mounts
+        → Fix: Thêm initContainer + volumes
+
+[05:15] ❌ DBT Job lỗi "profiles-dir does not exist"
+        → Nguyên nhân: ConfigMaps mount tạo files với "..data" prefix
+        → Fix: Dùng initContainer copy files selectively
+
+[05:30] ❌ InvalidImageName ${DOCKERHUB_USERNAME}
+        → Nguyên nhân: Biến không được expand khi apply
+        → Fix: sed 's|${DOCKERHUB_USERNAME}|annduke|g'
+
+[06:00] ✅ DBT Build Job completed thành công
+```
+
+## 📋 Tổng kết tất cả fixes
+
+| File | Thay đổi |
+|------|----------|
+| `Makefile` | Sửa namespace spark → hasu-ml |
+| `job-spark-etl.yaml` | Thêm driver IP, resources |
+| `job-dbt-build.yaml` | Thêm initContainer, volumes |
+| `cronjob-dbt-daily` | Recreate với đúng volumes |
+| `TROUBLESHOOTING_SPARK.md` | Ghi lại 13 lỗi + giải pháp |
+
+## 🔧 Lệnh apply đúng cho DBT Job
+
+```bash
+# Cách 1: Dùng sed replace
+ cat k8s/05-ml-pipeline/job-dbt-build.yaml | \
+   sed 's|${DOCKERHUB_USERNAME}|annduke|g' | \
+   kubectl apply -f -
+
+# Cách 2: Export variable rồi dùng envsubst
+ export DOCKERHUB_USERNAME=annduke
+ envsubst < k8s/05-ml-pipeline/job-dbt-build.yaml | kubectl apply -f -
+
+# Cách 3: Apply trực tiếp stdin (bypass file permission)
+ cat << 'YAML' | kubectl apply -f -
+ [job content]
+ YAML
+```
+
+
+---
+
+## 🕐 Timeline Update (2026-03-10 tiếp theo)
+
+```
+[14:00] ❌ Makefile lỗi "job/dbt-build not found"
+        → Nguyên nhân: File job-dbt-build.yaml bị ghi đè bằng CronJob
+        → Fix: Tạo lại file đúng là Job (không phải CronJob)
+
+[14:30] ⚠️  DBT lỗi "Unknown table expression identifier"
+        → Nguyên nhân: Thiếu sync data từ PostgreSQL sang ClickHouse
+        → Fix: Chạy make k3s-sync trước, hoặc bỏ qua (không ảnh hưởng)
+```
+
+## 📋 Best Practices cho DBT trong K3s
+
+### 1. Tổ chức ConfigMaps
+```
+dbt-models-staging/         - Staging models
+dbt-models-intermediate/    - Intermediate models  
+dbt-models-marts-*/         - Marts models (chia nhỏ)
+dbt-profiles/               - profiles.yml
+dbt-project-files/          - dbt_project.yml
+dbt-sources/                - sources.yml
+```
+
+### 2. Tách biệt Job và CronJob
+| File | Loại | Mục đích |
+|------|------|----------|
+| job-dbt-build.yaml | Job | Chạy một lần qua Makefile |
+| cronjob-dbt-daily.yaml | CronJob | Chạy định kỳ (3 AM) |
+
+### 3. Thứ tự chạy pipeline đúng
+```bash
+# 1. Sync data
+make k3s-sync  # PostgreSQL → ClickHouse
+
+# 2. Build DBT models  
+make k3s-dbt   # hoặc trong make app-k3s
+
+# 3. ML Training
+make k3s-ml-train
+```
+
+## 🔧 Quick Fixes
+
+```bash
+# Fix job-dbt-build.yaml bị sai
+sudo cp /tmp/job-dbt-build-new.yaml k8s/05-ml-pipeline/job-dbt-build.yaml
+
+# Kiểm tra tất cả ConfigMaps
+count_models() {
+    kubectl get configmap -n hasu-ml | grep dbt-models | awk '{sum+=$2} END {print "Total: "sum" files"}'
+}
+
+# Chạy DBT một lần để test
+kubectl apply -f k8s/05-ml-pipeline/job-dbt-build.yaml
+kubectl wait --for=condition=complete job/dbt-build -n hasu-ml --timeout=300s
+```
+

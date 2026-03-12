@@ -347,33 +347,58 @@ kubectl get events -n hasu-ml --sort-by='.lastTimestamp'
 
 Hệ thống tự động import CSV **hàng ngày lúc 2h sáng** thông qua Airflow DAG.
 
-### Import thủ công (⚡ Spark Hybrid - Khuyến nghị)
+### Import thủ công (⚡ Python ETL - Khuyến nghị)
 
-**Docker:**
+ETL Pipeline xử lý dữ liệu CSV/Excel → PostgreSQL (OLTP) → ClickHouse (OLAP):
+
+**K3s (Production):**
+```bash
+# Chạy ETL độc lập
+make k3s-spark-etl      # Chỉ chạy ETL
+make k3s-spark          # Interactive mode (hỏi trước khi chạy)
+
+# Hoặc chạy full pipeline
+make app-k3s            # Full pipeline: ETL → DBT → ML
+```
+
+**Docker (Development):**
 ```bash
 cd docker
 
-# Khởi động Spark cluster (lần đầu)
-make spark-up
-
-# Chạy Spark ETL (CSV → PostgreSQL → ClickHouse)
-make spark-etl
+# Chạy ETL (sử dụng Python + PySpark)
+make etl-python         # ETL với Python
+make sync-to-ch         # Legacy sync (nếu cần)
 
 # Hoặc chạy full pipeline
-make pipeline-spark
+make app
 ```
 
-**K3s:**
-```bash
-# Deploy Spark cluster (lần đầu)
-make spark-deploy
+### ⚡ Kiến trúc ETL
 
-# Chạy Spark ETL
-make k3s-spark
-
-# Hoặc chạy full pipeline
-make app-k3s  # Sử dụng Spark ETL by default
 ```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   CSV/Excel     │────▶│   Python ETL     │────▶│   PostgreSQL    │
+│   Input Files   │     │   (PySpark)      │     │   (OLTP)        │
+└─────────────────┘     └──────────────────┘     └────────┬────────┘
+                                                          │
+                                                          ▼
+                                                  ┌─────────────────┐
+                                                  │   ClickHouse    │
+                                                  │   (OLAP/DW)     │
+                                                  └─────────────────┘
+```
+
+**Luồng xử lý:**
+1. **Products**: Đọc `DanhSachSanPham*.csv` → Parse nhóm hàng 3 cấp → PostgreSQL `products`
+2. **Sales**: Đọc `BaoCaoBanHang*.xlsx` → Trích xuất giao dịch → PostgreSQL `transactions` + `transaction_details`
+3. **Sync**: Đồng bộ từ PostgreSQL → ClickHouse `stg_products`, `stg_transactions`, `stg_transaction_details`
+
+| Metric | Performance |
+|--------|-------------|
+| Products | ~16,000 records |
+| Transactions | ~7,500 records |
+| Transaction Details | ~16,000 records |
+| Total Time | ~5-10 giây |
 
 ### Import thủ công (Legacy - Deprecated)
 
@@ -568,16 +593,16 @@ kubectl get secret dockerhub-credentials -n hasu-ml
 # Development (Docker)
 make app                # Run full pipeline locally
 
-# Production (K3s) - Spark Hybrid ETL
-make app-k3s            # Run full pipeline on K3s (uses Spark ETL)
-make k3s-spark          # ⚡ Spark ETL only (CSV → PostgreSQL → ClickHouse)
-make spark-deploy       # Deploy Spark cluster
+# Production (K3s) - Python ETL
+make app-k3s            # Run full pipeline on K3s
+make k3s-spark-etl      # ⚡ Python ETL only (CSV → PostgreSQL → ClickHouse)
+make k3s-spark          # Interactive ETL (hỏi trước khi chạy)
 make k3s-dbt            # DBT build only
 make k3s-ml-train       # ML training only
 make k3s-ml-predict     # ML prediction only
 
 # Production (K3s) - Legacy (Deprecated)
-make k3s-sync-legacy    # ⚠️ Legacy sync - use k3s-spark instead
+make k3s-sync           # ⚠️ Legacy sync - use k3s-spark-etl instead
 
 # K8s Management
 make k8s-deploy         # Deploy/Update K3s resources
@@ -587,20 +612,19 @@ make k8s-logs           # View logs
 make k8s-delete         # Delete all resources
 ```
 
-### Spark ETL Commands
+### Python ETL Commands
 
 ```bash
-# Docker
-cd docker
-make spark-up           # Start Spark cluster
-make spark-etl          # Run Spark Hybrid ETL
-make spark-status       # Check Spark status
-make spark-down         # Stop Spark cluster
-
 # K3s
-make spark-deploy       # Deploy Spark to K3s
-make spark-status       # Check Spark cluster
-make spark-delete       # Remove Spark cluster
+make k3s-spark-etl      # Run Python ETL Job
+make k3s-spark          # Interactive ETL mode
+kubectl logs -n hasu-ml job/spark-etl  # Xem logs
+
+# Docker (Legacy Spark - Deprecated)
+cd docker
+make spark-up           # Start Spark cluster (nếu cần)
+make spark-etl          # Run Spark ETL (legacy)
+make spark-down         # Stop Spark cluster
 ```
 
 ---

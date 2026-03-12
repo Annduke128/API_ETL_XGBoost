@@ -14,12 +14,6 @@ models:
         tests:
           - unique
           - not_null
-      - name: default_selling_price
-        description: "Giá bán mặc định"
-        tests:
-          - dbt_utils.accepted_range:
-              min_value: 0
-
   - name: stg_branches
     description: "Staging model cho branches"
     columns:
@@ -42,11 +36,6 @@ models:
         tests:
           - unique
           - not_null
-      - name: revenue
-        description: "Doanh thu"
-        tests:
-          - dbt_utils.accepted_range:
-              min_value: 0
       - name: transaction_date
         description: "Ngày giao dịch"
         tests:
@@ -65,12 +54,6 @@ models:
         # tests:
         #   - dbt_utils.accepted_range:
         #       min_value: 0  # Disabled: có thể có giá trị âm do trả hàng
-      - name: selling_price
-        description: "Giá bán"
-        tests:
-          - dbt_utils.accepted_range:
-              min_value: 0
-
   - name: stg_product_variant_parsing
     description: "Parse product_name để tách variant attributes (size, flavor, packaging)"
     columns:

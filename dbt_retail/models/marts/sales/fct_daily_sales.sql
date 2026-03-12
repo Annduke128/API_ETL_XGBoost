@@ -1,76 +1,28 @@
-{{
-    config(
-        materialized='table',
-        engine='MergeTree()',
-        tags=['marts']
-    )
-}}
+{{ config(
+    materialized='table',
+    engine='MergeTree()',
+    partition_by='toYYYYMMDD(transaction_date)',
+    order_by=['transaction_date', 'product_code', 'branch_code'],
+    tags=['marts', 'sales', 'ml_source']
+) }}
 
-WITH transaction_details AS (
-    SELECT * FROM {{ ref('stg_transaction_details') }}
-),
-
-transactions AS (
-    SELECT 
-        transaction_id,
-        transaction_date,
-        branch_code
-    FROM {{ ref('stg_transactions') }}
-),
-
-td_with_date AS (
-    SELECT 
-        td.*,
-        t.transaction_date,
-        t.branch_code
-    FROM transaction_details td
-    JOIN transactions t ON td.transaction_id = t.transaction_id
-),
-
-daily_sales AS (
-    SELECT
-        td.transaction_date AS transaction_date,
-        toYYYYMMDD(td.transaction_date) AS date_key,
-        
-        -- Product
-        td.product_code AS product_code,
-        p.product_id AS product_id,
-        
-        -- Branch
-        td.branch_code AS branch_code,
-        b.branch_id AS branch_id,
-        
-        -- Số liệu
-        COUNT(DISTINCT td.transaction_id) AS transaction_count,
-        SUM(td.quantity) AS quantity_sold,
-        SUM(td.line_revenue) AS gross_revenue,
-        SUM(td.line_cost) AS cost_of_goods_sold,
-        SUM(td.line_profit) AS gross_profit,
-        
-        -- Metrics
-        AVG(td.selling_price) AS avg_selling_price,
-        AVG(td.line_profit) AS avg_profit_per_unit,
-        
-        -- Tỷ lệ
-        CASE 
-            WHEN SUM(td.line_revenue) > 0 
-            THEN SUM(td.line_profit) / SUM(td.line_revenue) 
-            ELSE 0 
-        END AS profit_margin,
-        
-        -- Timestamp
-        now() AS etl_timestamp
-        
-    FROM td_with_date td
-    LEFT JOIN {{ ref('dim_product') }} p ON td.product_code = p.product_code
-    LEFT JOIN {{ ref('dim_branch') }} b ON td.branch_code = b.branch_code
-    
-    GROUP BY 
-        td.transaction_date,
-        td.product_code,
-        p.product_id,
-        td.branch_code,
-        b.branch_id
-)
-
-SELECT * FROM daily_sales
+SELECT
+    t.ngay AS transaction_date,
+    toYYYYMMDD(t.ngay) AS date_key,
+    d.ma_hang AS product_code,
+    p.ma_hang AS product_id,
+    t.ma_chi_nhanh AS branch_code,
+    b.ma_chi_nhanh AS branch_id,
+    count() AS transaction_count,
+    sum(d.so_luong) AS quantity_sold,
+    sum(d.thanh_tien) AS gross_revenue,
+    sum(d.so_luong * 0) AS cost_of_goods_sold,  -- Placeholder
+    sum(d.thanh_tien) AS gross_profit,  -- Placeholder
+    avg(d.don_gia) AS avg_selling_price,
+    0 AS profit_margin,  -- Placeholder
+    now() AS etl_timestamp
+FROM {{ source('retail_source', 'raw_transaction_details') }} d
+JOIN {{ source('retail_source', 'raw_transactions') }} t ON d.transaction_id = t.id
+LEFT JOIN {{ source('retail_source', 'raw_products') }} p ON d.ma_hang = p.ma_hang
+LEFT JOIN {{ source('retail_source', 'raw_branches') }} b ON t.ma_chi_nhanh = b.ma_chi_nhanh
+GROUP BY t.ngay, d.ma_hang, p.ma_hang, t.ma_chi_nhanh, b.ma_chi_nhanh

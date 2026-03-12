@@ -7,16 +7,89 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      initContainers:
+      - name: setup-dbt
+        image: busybox:1.36
+        resources:
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+        command: ["sh", "-c"]
+        args:
+        - |
+          echo "Setting up DBT project..."
+          mkdir -p /workspace/models/staging \
+                   /workspace/models/intermediate \
+                   /workspace/models/marts \
+                   /root/.dbt
+          
+          # Copy profiles
+          cp /tmp/profiles/profiles.yml /root/.dbt/
+          
+          # Copy project file
+          cp /tmp/project/dbt_project.yml /workspace/
+          
+          # Copy staging models
+          cp /tmp/models-staging/* /workspace/models/staging/ 2>/dev/null || true
+          
+          # Copy intermediate models
+          cp /tmp/models-intermediate/* /workspace/models/intermediate/ 2>/dev/null || true
+          
+          # Copy marts models
+          cp /tmp/models-marts-core/* /workspace/models/marts/ 2>/dev/null || true
+          cp /tmp/models-marts-customers/* /workspace/models/marts/ 2>/dev/null || true
+          cp /tmp/models-marts-sales/* /workspace/models/marts/ 2>/dev/null || true
+          cp /tmp/models-marts-inventory/* /workspace/models/marts/ 2>/dev/null || true
+          cp /tmp/models-marts-products/* /workspace/models/marts/ 2>/dev/null || true
+          
+          echo "Done setup"
+          echo "Total models: $(find /workspace/models -name '*.sql' | wc -l)"
+        volumeMounts:
+        - name: dbt-profiles-tmp
+          mountPath: /tmp/profiles
+        - name: dbt-project-tmp
+          mountPath: /tmp/project
+        - name: dbt-models-staging-tmp
+          mountPath: /tmp/models-staging
+        - name: dbt-models-intermediate-tmp
+          mountPath: /tmp/models-intermediate
+        - name: dbt-models-marts-core-tmp
+          mountPath: /tmp/models-marts-core
+        - name: dbt-models-marts-customers-tmp
+          mountPath: /tmp/models-marts-customers
+        - name: dbt-models-marts-sales-tmp
+          mountPath: /tmp/models-marts-sales
+        - name: dbt-models-marts-inventory-tmp
+          mountPath: /tmp/models-marts-inventory
+        - name: dbt-models-marts-products-tmp
+          mountPath: /tmp/models-marts-products
+        - name: workspace
+          mountPath: /workspace
+        - name: dbt-home
+          mountPath: /root/.dbt
       containers:
       - name: dbt
         image: ${DOCKERHUB_USERNAME}/hasu-dbt:latest
         imagePullPolicy: Always
-        command: ["dbt", "build", "--select", "staging,marts", "--target", "clickhouse"]
+        workingDir: /workspace
+        command: ["dbt"]
+        args: 
+        - "build"
+        - "--profiles-dir"
+        - "/root/.dbt"
         envFrom:
         - configMapRef:
             name: hasu-ml-config
         - secretRef:
             name: hasu-ml-secrets
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: dbt-home
+          mountPath: /root/.dbt
         resources:
           requests:
             memory: "1Gi"
@@ -24,3 +97,35 @@ spec:
           limits:
             memory: "2Gi"
             cpu: "1000m"
+      volumes:
+      - name: dbt-profiles-tmp
+        configMap:
+          name: dbt-profiles
+      - name: dbt-project-tmp
+        configMap:
+          name: dbt-project-files
+      - name: dbt-models-staging-tmp
+        configMap:
+          name: dbt-models-staging
+      - name: dbt-models-intermediate-tmp
+        configMap:
+          name: dbt-models-intermediate
+      - name: dbt-models-marts-core-tmp
+        configMap:
+          name: dbt-models-marts-core
+      - name: dbt-models-marts-customers-tmp
+        configMap:
+          name: dbt-models-marts-customers
+      - name: dbt-models-marts-sales-tmp
+        configMap:
+          name: dbt-models-marts-sales
+      - name: dbt-models-marts-inventory-tmp
+        configMap:
+          name: dbt-models-marts-inventory
+      - name: dbt-models-marts-products-tmp
+        configMap:
+          name: dbt-models-marts-products
+      - name: workspace
+        emptyDir: {}
+      - name: dbt-home
+        emptyDir: {}
