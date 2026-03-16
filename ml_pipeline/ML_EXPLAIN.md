@@ -699,3 +699,56 @@ thu thập thêm dữ liệu lịch sử.
 - Time Series Forecasting Best Practices
 - ABC Analysis in Inventory Management
 - ClickHouse SQL Reference
+
+---
+
+## Purchase Order Generation (Đơn đặt hàng) ⭐ NEW
+
+### Tổng quan
+
+Hệ thống tự động tạo đơn đặt hàng dựa trên:
+1. **Dự báo bán hàng** (7 ngày tới)
+2. **Tồn kho hiện tại** (từ ClickHouse)
+3. **Tỉ lệ quy đổi** (từ cột Quy đổi trong Excel)
+
+### Công thức tính toán
+
+```
+Công thức:
+    Nhu cầu = MAX(Dự báo 7 ngày, Tồn nhỏ nhất)
+    Cần nhập = Nhu cầu - Tồn kho hiện tại
+    
+Làm tròn theo quy cách:
+    Đơn đặt hàng = ROUND_UP(Cần nhập / Quy đổi) × Quy đổi
+```
+
+### Ví dụ minh họa
+
+| Sản phẩm | Dự báo 7 ngày | Tồn hiện tại | Cần nhập | Quy đổi | Đơn đặt hàng |
+|----------|---------------|--------------|----------|---------|--------------|
+| Cốc giấy đỏ (lẻ) | 125 cái | 10 cái | 115 cái | 1 | **115 cái** |
+| Cốc giấy đỏ (lốc) | 125 cái | 10 cái | 115 cái | 50 | **150 cái** (3 lốc) |
+| Cốc giấy đỏ (thùng) | 125 cái | 10 cái | 115 cái | 1200 | **1200 cái** (1 thùng) |
+
+### Logic quy cách
+
+| Mã hàng | Quy đổi | Ý nghĩa |
+|---------|---------|---------|
+| 16000109 | 1 | Đơn vị lẻ (1 cái) |
+| 16000109-1 | 50 | Lốc (50 cái) |
+| 16000109-2 | 1200 | Thùng (1200 cái) |
+
+### Cách sử dụng
+
+```bash
+# Tạo đơn hàng cho top 50 sản phẩm
+python xgboost_forecast.py --mode po --top-n 50
+```
+
+### Inventory Data Integration
+
+File `BaoCaoXuatNhapTon_*.xlsx` được import **trực tiếp** vào ClickHouse (bypass PostgreSQL).
+
+---
+
+*Last updated: 2026-03-16*

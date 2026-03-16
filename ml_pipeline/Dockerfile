@@ -16,9 +16,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Tạo thư mục models
 RUN mkdir -p /app/models
 
-# Copy source code
-COPY *.py .
+# Copy source code (trừ xgboost_forecast.py sẽ copy sau)
+COPY db_connectors.py .
+COPY email_notifier.py .
+COPY pipeline_monitor.py .
+COPY train_models.py .
+COPY xgboost_forecast_gpu_patch.py .
 COPY *.yaml .
+
+# Copy xgboost_forecast.py SAU CÙNG (quan trọng nhất)
+COPY xgboost_forecast.py .
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

@@ -8,34 +8,28 @@
   )
 }}
 
--- Model này chứa doanh số THƯỜNG (không khuyến mại)
--- Dùng để train ML model cho baseline demand prediction
--- Loại bỏ các sản phẩm category 'Khuyến mại%' để tránh làm méo pattern
-
 SELECT 
-    f.transaction_date,
-    f.date_key,
-    f.product_code,
-    f.product_id,
-    f.branch_code,
-    f.branch_id,
-    f.transaction_count,
-    f.quantity_sold,
-    f.gross_revenue,
-    f.cost_of_goods_sold,
-    f.gross_profit,
-    f.avg_selling_price,
-    f.avg_profit_per_unit,
-    f.profit_margin,
-    f.etl_timestamp,
-    
-    -- Flag cho ML
+    t.ngay AS transaction_date,
+    toYYYYMMDD(t.ngay) AS date_key,
+    td.ma_hang AS product_code,
+    p.ma_hang AS product_id,
+    t.ma_chi_nhanh AS branch_code,
+    b.ma_chi_nhanh AS branch_id,
+    count() AS transaction_count,
+    sum(td.so_luong) AS quantity_sold,
+    sum(td.thanh_tien) AS gross_revenue,
+    sum(td.so_luong * 0) AS cost_of_goods_sold,
+    sum(td.thanh_tien) AS gross_profit,
+    avg(td.don_gia) AS avg_selling_price,
+    avg(td.thanh_tien) AS avg_profit_per_unit,
+    0 AS profit_margin,
+    now() AS etl_timestamp,
     0 AS is_promotional_sale,
     'regular' AS sale_type
-
-FROM {{ ref('fct_daily_sales') }} f
-LEFT JOIN {{ ref('dim_product') }} p 
-    ON f.product_code = p.product_code
-WHERE p.product_code IS NULL 
-   OR (lower(p.category_level_1) NOT LIKE '%khuyến mại%' 
-       AND lower(p.category_level_1) NOT LIKE '%khuyen mai%')
+FROM {{ source('retail_source', 'raw_transaction_details') }} td
+JOIN {{ source('retail_source', 'raw_transactions') }} t ON td.transaction_id = t.id
+LEFT JOIN {{ source('retail_source', 'raw_products') }} p ON td.ma_hang = p.ma_hang
+LEFT JOIN {{ source('retail_source', 'raw_branches') }} b ON t.ma_chi_nhanh = b.ma_chi_nhanh
+WHERE lower(p.cap_1) NOT LIKE '%khuyến mại%' 
+   AND lower(p.cap_1) NOT LIKE '%khuyen mai%'
+GROUP BY t.ngay, td.ma_hang, p.ma_hang, t.ma_chi_nhanh, b.ma_chi_nhanh

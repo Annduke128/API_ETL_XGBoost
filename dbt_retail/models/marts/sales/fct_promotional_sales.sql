@@ -8,37 +8,30 @@
   )
 }}
 
--- Model này chứa doanh số KHUYẾN MẠI
--- Dùng để train ML model riêng cho promotion demand prediction
--- Các sản phẩm này có pattern khác biệt so với baseline
-
 SELECT 
-    f.transaction_date,
-    f.date_key,
-    f.product_code,
-    f.product_id,
-    f.branch_code,
-    f.branch_id,
-    f.transaction_count,
-    f.quantity_sold,
-    f.gross_revenue,
-    f.cost_of_goods_sold,
-    f.gross_profit,
-    f.avg_selling_price,
-    f.avg_profit_per_unit,
-    f.profit_margin,
-    f.etl_timestamp,
-    
-    -- Promotion metadata
-    p.category_level_1 AS promotion_category,
-    p.category_level_2 AS promotion_subcategory,
-    
-    -- Flag cho ML
+    t.ngay AS transaction_date,
+    toYYYYMMDD(t.ngay) AS date_key,
+    td.ma_hang AS product_code,
+    p.ma_hang AS product_id,
+    t.ma_chi_nhanh AS branch_code,
+    b.ma_chi_nhanh AS branch_id,
+    count() AS transaction_count,
+    sum(td.so_luong) AS quantity_sold,
+    sum(td.thanh_tien) AS gross_revenue,
+    sum(td.so_luong * 0) AS cost_of_goods_sold,
+    sum(td.thanh_tien) AS gross_profit,
+    avg(td.don_gia) AS avg_selling_price,
+    avg(td.thanh_tien) AS avg_profit_per_unit,
+    0 AS profit_margin,
+    now() AS etl_timestamp,
+    p.cap_1 AS promotion_category,
+    p.cap_2 AS promotion_subcategory,
     1 AS is_promotional_sale,
     'promotional' AS sale_type
-
-FROM {{ ref('fct_daily_sales') }} f
-INNER JOIN {{ ref('dim_product') }} p 
-    ON f.product_code = p.product_code
-WHERE lower(p.category_level_1) LIKE '%khuyến mại%' 
-   OR lower(p.category_level_1) LIKE '%khuyen mai%'
+FROM {{ source('retail_source', 'raw_transaction_details') }} td
+JOIN {{ source('retail_source', 'raw_transactions') }} t ON td.transaction_id = t.id
+LEFT JOIN {{ source('retail_source', 'raw_products') }} p ON td.ma_hang = p.ma_hang
+LEFT JOIN {{ source('retail_source', 'raw_branches') }} b ON t.ma_chi_nhanh = b.ma_chi_nhanh
+WHERE lower(p.cap_1) LIKE '%khuyến mại%' 
+   OR lower(p.cap_1) LIKE '%khuyen mai%'
+GROUP BY t.ngay, td.ma_hang, p.ma_hang, t.ma_chi_nhanh, b.ma_chi_nhanh, p.cap_1, p.cap_2

@@ -319,6 +319,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ../ml_pipeline:/app
+      - ../pipeline_monitor.py:/app/pipeline_monitor.py:ro
       - ml_models:/app/models
     depends_on:
       - postgres

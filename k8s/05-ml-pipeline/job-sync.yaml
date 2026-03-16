@@ -18,6 +18,14 @@ spec:
       - name: wait-for-postgres
         image: busybox:1.36
         command: ['sh', '-c', 'until nc -z postgres 5432 && nc -z clickhouse 9000; do echo waiting for databases...; sleep 2; done;']
+        resources:     
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+
       containers:
       - name: sync
         image: ${DOCKERHUB_USERNAME}/hasu-sync-tool:latest

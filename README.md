@@ -757,3 +757,54 @@ Tự động gửi email cho các sự kiện:
 MIT License
 
 **Last Updated:** 2026-03-07
+
+---
+
+## 🆕 Cập nhật mới nhất (2026-03-16)
+
+### ✅ Tính năng mới
+
+| Tính năng | Mô tả | Status |
+|-----------|-------|--------|
+| **Purchase Order Generation** | Tự động tạo đơn đặt hàng dựa trên dự báo ML + tồn kho + quy đổi | ✅ Hoàn thành |
+| **Inventory Integration** | Import tồn kho trực tiếp vào ClickHouse | ✅ Hoàn thành |
+| **Quy đổi ĐVT** | Hỗ trợ tỉ lệ quy đổi từ Excel (cột Quy đổi) | ✅ Hoàn thành |
+| **Price Fix** | Fix giá sản phẩm = 0 trong transaction_details | ✅ Hoàn thành |
+
+### 📦 Purchase Order Generation
+
+Tạo đơn đặt hàng tự động với công thức:
+
+```
+Cần nhập = MAX(Dự báo 7 ngày, Tồn nhỏ nhất) - Tồn kho hiện tại
+Đơn đặt hàng = ROUND_UP(Cần nhập / Quy đổi) × Quy đổi
+```
+
+**Ví dụ:**
+- Cần nhập: 115 cái
+- Quy đổi: 50 (lốc 50 cái)
+- Đơn đặt hàng: 150 cái (3 lốc)
+
+**Cách sử dụng:**
+```bash
+python ml_pipeline/xgboost_forecast.py --mode po --top-n 50
+```
+
+### 📊 Inventory Import trực tiếp ClickHouse
+
+File `BaoCaoXuatNhapTon_*.xlsx` được import **trực tiếp** vào ClickHouse (không qua PostgreSQL):
+
+```python
+# Trong etl_main.py
+def process_inventory_pyspark(spark):
+    # Đọc từ Excel
+    # Ghi trực tiếp vào ClickHouse.staging_inventory_transactions
+```
+
+### 🔧 Docker Images
+
+| Image | Tag | Thay đổi |
+|-------|-----|----------|
+| annduke/hasu-spark-etl | real-final-v18 | Thêm inventory import, quy_doi column |
+| annduke/hasu-ml-pipeline | latest | Thêm purchase order generation |
+

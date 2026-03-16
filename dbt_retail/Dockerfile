@@ -18,5 +18,11 @@ RUN pip install --no-cache-dir \
 # Set working directory
 WORKDIR /usr/app/dbt
 
+# Copy dbt project files
+COPY . .
+
+# Install dbt packages (offline mode - will retry if network available)
+RUN dbt deps || echo "Warning: dbt deps failed, will retry at runtime"
+
 # Default command
 CMD ["dbt", "run"]

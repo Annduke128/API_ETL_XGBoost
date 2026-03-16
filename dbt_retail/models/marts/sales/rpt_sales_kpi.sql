@@ -6,54 +6,48 @@
 }}
 
 WITH daily_sales AS (
-    SELECT * FROM {{ ref('fct_daily_sales') }}
+    SELECT
+        ngay,
+        toYYYYMMDD(ngay) AS date_key,
+        SUM(thanh_tien) AS gross_revenue,
+        SUM(so_luong) AS quantity_sold,
+        COUNT(DISTINCT transaction_id) AS transaction_count
+    FROM {{ source('retail_source', 'raw_transaction_details') }} td
+    JOIN {{ source('retail_source', 'raw_transactions') }} t ON td.transaction_id = t.id
+    GROUP BY ngay
 ),
 
-date_dim AS (
-    SELECT * FROM {{ ref('dim_date') }}
-),
-
--- Tính các KPI chính
 current_period AS (
     SELECT
         'Current Month' AS period,
         SUM(gross_revenue) AS revenue,
-        SUM(gross_profit) AS profit,
         SUM(quantity_sold) AS quantity,
-        SUM(transaction_count) AS transactions,
-        AVG(profit_margin) AS avg_margin
-    FROM daily_sales ds
-    JOIN date_dim d ON ds.date_key = d.date_key
-    WHERE d.year = toYear(today())
-      AND d.month = toMonth(today())
+        SUM(transaction_count) AS transactions
+    FROM daily_sales
+    WHERE toYear(ngay) = toYear(today())
+      AND toMonth(ngay) = toMonth(today())
 ),
 
 previous_period AS (
     SELECT
         'Previous Month' AS period,
         SUM(gross_revenue) AS revenue,
-        SUM(gross_profit) AS profit,
         SUM(quantity_sold) AS quantity,
-        SUM(transaction_count) AS transactions,
-        AVG(profit_margin) AS avg_margin
-    FROM daily_sales ds
-    JOIN date_dim d ON ds.date_key = d.date_key
-    WHERE d.year = toYear(today() - toIntervalMonth(1))
-      AND d.month = toMonth(today() - toIntervalMonth(1))
+        SUM(transaction_count) AS transactions
+    FROM daily_sales
+    WHERE toYear(ngay) = toYear(today() - toIntervalMonth(1))
+      AND toMonth(ngay) = toMonth(today() - toIntervalMonth(1))
 ),
 
 ytd AS (
     SELECT
         'YTD' AS period,
         SUM(gross_revenue) AS revenue,
-        SUM(gross_profit) AS profit,
         SUM(quantity_sold) AS quantity,
-        SUM(transaction_count) AS transactions,
-        AVG(profit_margin) AS avg_margin
-    FROM daily_sales ds
-    JOIN date_dim d ON ds.date_key = d.date_key
-    WHERE d.year = toYear(today())
-      AND d.full_date <= today()
+        SUM(transaction_count) AS transactions
+    FROM daily_sales
+    WHERE toYear(ngay) = toYear(today())
+      AND ngay <= today()
 ),
 
 kpi_summary AS (
@@ -67,15 +61,9 @@ kpi_summary AS (
 SELECT
     period,
     revenue,
-    profit,
     quantity,
     transactions,
-    avg_margin,
-    
-    -- Tính toán thêm
     CASE WHEN transactions > 0 THEN revenue / transactions ELSE 0 END AS avg_transaction_value,
     CASE WHEN quantity > 0 THEN revenue / quantity ELSE 0 END AS avg_unit_price,
-    
     now() AS report_timestamp
-    
 FROM kpi_summary

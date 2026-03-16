@@ -804,3 +804,69 @@ docker build -t hasu-spark-etl:latest .
 ---
 
 **Last Updated**: 2026-03-07 (Added ML workflow documentation)
+
+---
+
+## 🆕 Cập nhật mới nhất (2026-03-16)
+
+### 1. Inventory Import trực tiếp ClickHouse
+
+**Thay đổi:** File `BaoCaoXuatNhapTon_*.xlsx` được import **trực tiếp** vào ClickHouse (bypass PostgreSQL)
+
+```python
+# Trong etl_main.py - process_inventory_pyspark()
+- Đọc file Excel
+- Transform columns  
+- Ghi trực tiếp vào ClickHouse.staging_inventory_transactions
+```
+
+**Lý do:** Inventory là dữ liệu phân tích, không cần ACID transactions của PostgreSQL
+
+### 2. Cột Quy đổi (quy_doi)
+
+**Thay đổi:** Thêm cột `quy_doi` từ Excel vào bảng `products`
+
+| Mã hàng | Tên | quy_doi | Ý nghĩa |
+|---------|-----|---------|---------|
+| 16000109 | Cốc giấy đỏ | 1 | Đơn vị lẻ |
+| 16000109-1 | Cốc giấy đỏ | 50 | Lốc 50 cái |
+| 16000109-2 | Cốc giấy đỏ | 1200 | Thùng 1200 cái |
+
+### 3. Purchase Order Generation
+
+**Thay đổi:** Thêm hàm `generate_purchase_order_csv()` trong `xgboost_forecast.py`
+
+**Logic:**
+```
+Cần nhập = MAX(Dự báo 7 ngày, Tồn nhỏ nhất) - Tồn kho hiện tại
+Đơn đặt hàng = ROUND_UP(Cần nhập / quy_doi) × quy_doi
+```
+
+**Ví dụ:**
+- Dự báo: 125 cái, Tồn kho: 10 cái → Cần nhập: 115 cái
+- Quy đổi: 50 (lốc) → Đặt: 150 cái (3 lốc)
+
+### 4. Docker Images mới
+
+| Image | Tag | Thay đổi |
+|-------|-----|----------|
+| annduke/hasu-spark-etl | real-final-v18 | + inventory import, + quy_doi |
+| annduke/hasu-ml-pipeline | latest | + purchase order generation |
+
+### 5. Schema Updates
+
+**PostgreSQL:**
+```sql
+ALTER TABLE products ADD COLUMN quy_doi INTEGER DEFAULT 1;
+```
+
+**ClickHouse:**
+```sql
+CREATE TABLE staging_inventory_transactions (...)
+ENGINE = MergeTree()
+ORDER BY (snapshot_date, ma_hang, chi_nhanh);
+```
+
+---
+
+**Last Updated**: 2026-03-16 (Added inventory integration & purchase order)

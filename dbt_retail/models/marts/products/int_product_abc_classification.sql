@@ -5,99 +5,56 @@
   )
 }}
 
-/*
-    ABC Classification cho sản phẩm
-    
-    Phân loại:
-    - A: Top ~20% sản phẩm, ~80% tổng doanh thu
-    - B: ~30% sản phẩm, ~15% tổng doanh thu  
-    - C: ~50% sản phẩm, ~5% tổng doanh thu
-    
-    Logic:
-    1. Tính tổng doanh thu lịch sử theo sản phẩm
-    2. Sắp xếp giảm dần theo doanh thu
-    3. Tính cumulative percentage
-    4. Gán ABC dựa trên cumulative percentage
-*/
-
 WITH product_revenue AS (
-    -- Tính tổng doanh thu theo sản phẩm từ fct_daily_sales
     SELECT 
-        p.product_id,
-        p.product_code,
-        p.product_name,
-        p.category_level_1,
-        p.category_level_2,
-        p.category_level_3,
-        COALESCE(SUM(f.gross_revenue), 0) as total_revenue,
-        COALESCE(SUM(f.quantity_sold), 0) as total_quantity,
-        COUNT(DISTINCT f.transaction_date) as active_days
-    FROM {{ ref('stg_products') }} p
-    LEFT JOIN {{ ref('fct_daily_sales') }} f 
-        ON p.product_code = f.product_code
-    GROUP BY 
-        p.product_id,
-        p.product_code,
-        p.product_name,
-        p.category_level_1,
-        p.category_level_2,
-        p.category_level_3
+        p.ma_hang AS product_code,
+        p.ten_hang AS product_name,
+        p.cap_1 AS category_level_1,
+        p.cap_2 AS category_level_2,
+        p.cap_3 AS category_level_3,
+        COALESCE(SUM(td.thanh_tien), 0) AS total_revenue,
+        COALESCE(SUM(td.so_luong), 0) AS total_quantity,
+        COUNT(DISTINCT t.ngay) AS active_days
+    FROM {{ source('retail_source', 'raw_products') }} p
+    LEFT JOIN {{ source('retail_source', 'raw_transaction_details') }} td ON p.ma_hang = td.ma_hang
+    LEFT JOIN {{ source('retail_source', 'raw_transactions') }} t ON td.transaction_id = t.id
+    GROUP BY p.ma_hang, p.ten_hang, p.cap_1, p.cap_2, p.cap_3
 ),
 
 total_revenue AS (
-    -- Tính tổng doanh thu toàn hệ thống
-    SELECT SUM(total_revenue) as grand_total
-    FROM product_revenue
+    SELECT SUM(total_revenue) AS grand_total FROM product_revenue
 ),
 
 ranked_products AS (
-    -- Sắp xếp và tính cumulative
     SELECT 
         *,
-        SUM(total_revenue) OVER (ORDER BY total_revenue DESC 
-                                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as cumulative_revenue,
-        grand_total
+        SUM(total_revenue) OVER (ORDER BY total_revenue DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_revenue,
+        (SELECT grand_total FROM total_revenue) AS grand_total
     FROM product_revenue
-    CROSS JOIN total_revenue
 ),
 
 abc_classified AS (
-    -- Gán ABC classification
     SELECT 
-        product_id,
-        product_code,
-        product_name,
-        category_level_1,
-        category_level_2,
-        category_level_3,
-        total_revenue,
-        total_quantity,
-        active_days,
+        product_code, product_name,
+        category_level_1, category_level_2, category_level_3,
+        total_revenue, total_quantity, active_days,
         cumulative_revenue,
-        cumulative_revenue / grand_total * 100 as cumulative_pct,
-        -- ABC classification logic
+        cumulative_revenue / grand_total * 100 AS cumulative_pct,
         CASE 
             WHEN cumulative_revenue / grand_total * 100 <= 80 THEN 'A'
             WHEN cumulative_revenue / grand_total * 100 <= 95 THEN 'B'
             ELSE 'C'
-        END as abc_class,
-        -- Thêm thông tin phân vị để debug
-        NTILE(100) OVER (ORDER BY total_revenue DESC) as revenue_percentile
+        END AS abc_class,
+        NTILE(100) OVER (ORDER BY total_revenue DESC) AS revenue_percentile
     FROM ranked_products
 )
 
 SELECT 
-    product_id,
-    product_code,
-    product_name,
-    category_level_1,
-    category_level_2,
-    category_level_3,
-    total_revenue as total_historical_revenue,
-    total_quantity as total_historical_quantity,
-    active_days,
-    abc_class,
-    revenue_percentile,
-    now() as calculated_at
+    product_code, product_name,
+    category_level_1, category_level_2, category_level_3,
+    total_revenue AS total_historical_revenue,
+    total_quantity AS total_historical_quantity,
+    active_days, abc_class, revenue_percentile,
+    now() AS calculated_at
 FROM abc_classified
 ORDER BY total_revenue DESC

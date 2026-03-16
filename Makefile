@@ -50,7 +50,9 @@ help:
 	@echo "║    make ml-fast         - Train without tuning                   ║"
 	@echo "║    make ml-optimal      - Train with 100 trials                  ║"
 	@echo "║    make ml-all          - Train + Predict + Report               ║"
-	@echo "║    make ml-predict      - Generate predictions only              ║"
+	@echo "║    make ml-predict      - Generate predictions only              ║
+ml-po           - Generate Purchase Order (top 50)       ║
+ml-po-100       - Generate Purchase Order (top 100)      ║"
 	@echo "║                                                                  ║"
 	@echo "║  CODE QUALITY                                                    ║"
 	@echo "║    make format          - Format code (black, isort)             ║"
@@ -74,6 +76,14 @@ help:
 	@echo "║  🚀 ONE-SHOT COMMANDS (Recommended)                               ║"
 	@echo "║    make app             - 🧠 Smart full pipeline (auto-detect)   ║"
 	@echo "║    make app-legacy      - 📁 Legacy full pipeline (manual CSV)   ║"
+	@echo "║                                                                  ║"
+	@echo "║  📊 PIPELINE MONITOR (Log chi tiết)                              ║"
+	@echo "║    make monitor         - Hiển thị tất cả stages                 ║"
+	@echo "║    make monitor-spark   - Log Spark ETL processing               ║"
+	@echo "║    make monitor-sync    - Log PostgreSQL → ClickHouse sync       ║"
+	@echo "║    make monitor-dbt     - Log DBT models build                   ║"
+	@echo "║    make monitor-ml      - Log ML Training metrics & KPIs         ║"
+	@echo "║    make monitor-forecast- Log Forecast results                   ║"
 	@echo "║                                                                  ║"
 	@echo "║  SMART PIPELINE (Auto-detect by filename)                        ║"
 	@echo "║    make smart-pipeline  - Smart process → Sync → DBT → ML        ║"
@@ -258,6 +268,14 @@ ml-report:
 	@echo "📊 Generating report..."
 	$(call ml-cmd,xgboost_forecast.py --mode report)
 
+ml-po:
+	@echo "📦 Generating Purchase Order (top 50)..."
+	$(call ml-cmd,xgboost_forecast.py --mode po --top-n 50)
+
+ml-po-100:
+	@echo "📦 Generating Purchase Order (top 100)..."
+	$(call ml-cmd,xgboost_forecast.py --mode po --top-n 100)
+
 # ============================================================================
 # DATA PROCESSING
 # ============================================================================
@@ -372,11 +390,46 @@ use-docker:
 	@echo "   make app    - Run pipeline locally"
 
 # ============================================================================
+# PIPELINE MONITOR - Log chi tiết cho từng stage
+# ============================================================================
+
+# ============================================================================
+# PIPELINE MONITOR - Log chi tiết cho từng stage (chạy trong Docker)
+# ============================================================================
+
+# Monitor tất cả các stages
+monitor:
+	@echo "📊 Running Pipeline Monitor..."
+	@cd docker && docker-compose --profile ml run --rm ml-pipeline python /app/pipeline_monitor.py all 2>/dev/null || \
+		echo "⚠️  Monitor cần containers đang chạy. Hãy chạy 'make app' trước."
+
+# Monitor từng stage
+monitor-spark:
+	@cd docker && docker-compose --profile ml run --rm ml-pipeline python /app/pipeline_monitor.py spark 2>/dev/null || \
+		echo "⚠️  Monitor cần containers đang chạy."
+
+monitor-sync:
+	@cd docker && docker-compose --profile ml run --rm ml-pipeline python /app/pipeline_monitor.py sync 2>/dev/null || \
+		echo "⚠️  Monitor cần containers đang chạy."
+
+monitor-dbt:
+	@cd docker && docker-compose --profile ml run --rm ml-pipeline python /app/pipeline_monitor.py dbt 2>/dev/null || \
+		echo "⚠️  Monitor cần containers đang chạy."
+
+monitor-ml:
+	@cd docker && docker-compose --profile ml run --rm ml-pipeline python /app/pipeline_monitor.py ml 2>/dev/null || \
+		echo "⚠️  Monitor cần containers đang chạy."
+
+monitor-forecast:
+	@cd docker && docker-compose --profile ml run --rm ml-pipeline python /app/pipeline_monitor.py forecast 2>/dev/null || \
+		echo "⚠️  Monitor cần containers đang chạy."
+
+# ============================================================================
 # ONE-SHOT FULL APPLICATION COMMANDS
 # ============================================================================
 
 # 🚀 DEFAULT: Smart Pipeline (Recommended - Auto-detect files by naming convention)
-app: check-env smart-pipeline
+app: check-env smart-pipeline monitor
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════════╗"
 	@echo "║              ✅ SMART APPLICATION COMPLETE! ✅                        ║"
@@ -387,10 +440,12 @@ app: check-env smart-pipeline
 	@echo "║     3. 🏗️  DBT Build                                                 ║"
 	@echo "║     4. 🤖 ML Training                                                ║"
 	@echo "║     5. 🔮 Predictions                                                ║"
+	@echo "║                                                                      ║"
+	@echo "║  📊 Xem chi tiết ở trên (Pipeline Monitor logs)                      ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════╝"
 
 # 🔄 Legacy: Original pipeline (manual CSV processing, no smart detection)
-app-legacy: pipeline-full ml-all
+app-legacy: pipeline-full ml-all monitor
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════════╗"
 	@echo "║              ✅ LEGACY APPLICATION COMPLETE! ✅                       ║"
@@ -401,6 +456,8 @@ app-legacy: pipeline-full ml-all
 	@echo "║     3. 🏗️  DBT Build                                                 ║"
 	@echo "║     4. 🤖 ML Training                                                ║"
 	@echo "║     5. 🔮 Predictions                                                ║"
+	@echo "║                                                                      ║"
+	@echo "║  📊 Xem chi tiết ở trên (Pipeline Monitor logs)                      ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════╝"
 
 # ============================================================================

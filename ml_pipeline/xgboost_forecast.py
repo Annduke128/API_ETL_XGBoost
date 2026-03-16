@@ -242,15 +242,15 @@ class SalesForecaster:
         FROM retail_dw.fct_regular_sales f
         LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
         LEFT JOIN (
-            SELECT month,
-                   argMax(seasonal_factor, updated_at) as seasonal_factor,
-                   argMax(revenue_factor, updated_at) as revenue_factor,
-                   argMax(quantity_factor, updated_at) as quantity_factor,
-                   argMax(is_peak_day, updated_at) as is_peak_day,
-                   argMax(peak_level, updated_at) as peak_level,
-                   argMax(peak_reason, updated_at) as peak_reason
-            FROM retail_dw.int_dynamic_seasonal_factor
-            GROUP BY month
+            SELECT sf.month,
+                   argMax(sf.seasonal_factor, sf.updated_at) as seasonal_factor,
+                   argMax(sf.revenue_factor, sf.updated_at) as revenue_factor,
+                   argMax(sf.quantity_factor, sf.updated_at) as quantity_factor,
+                   argMax(sf.is_peak_day, sf.updated_at) as is_peak_day,
+                   argMax(sf.peak_level, sf.updated_at) as peak_level,
+                   argMax(sf.peak_reason, sf.updated_at) as peak_reason
+            FROM retail_dw.int_dynamic_seasonal_factor sf
+            GROUP BY sf.month
         ) s ON toMonth(f.transaction_date) = s.month
         WHERE f.product_code IS NOT NULL
           AND f.product_code != ''
@@ -1630,14 +1630,14 @@ class SalesForecaster:
             seasonal_query = f"""
             SELECT 
                 month,
-                argMax(peak_reason, updated_at) as peak_reason,
-                argMax(seasonal_factor, updated_at) as seasonal_factor,
-                argMax(revenue_factor, updated_at) as revenue_factor,
-                argMax(quantity_factor, updated_at) as quantity_factor,
-                argMax(is_peak_day, updated_at) as is_peak_day
-            FROM retail_dw.int_dynamic_seasonal_factor
+                argMax(sf.peak_reason, sf.updated_at) as peak_reason,
+                argMax(sf.seasonal_factor, sf.updated_at) as seasonal_factor,
+                argMax(sf.revenue_factor, sf.updated_at) as revenue_factor,
+                argMax(sf.quantity_factor, sf.updated_at) as quantity_factor,
+                argMax(sf.is_peak_day, sf.updated_at) as is_peak_day
+            FROM retail_dw.int_dynamic_seasonal_factor sf
             WHERE month IN ({months_str})
-            GROUP BY month
+            GROUP BY sf.month
             """
             try:
                 seasonal_df = self.ch.query(seasonal_query)
@@ -1695,15 +1695,15 @@ class SalesForecaster:
             FROM retail_dw.fct_regular_sales f
             LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
             LEFT JOIN (
-                SELECT month,
-                       argMax(seasonal_factor, updated_at) as seasonal_factor,
-                       argMax(revenue_factor, updated_at) as revenue_factor,
-                       argMax(quantity_factor, updated_at) as quantity_factor,
-                       argMax(is_peak_day, updated_at) as is_peak_day,
-                       argMax(peak_level, updated_at) as peak_level,
-                       argMax(peak_reason, updated_at) as peak_reason
-                FROM retail_dw.int_dynamic_seasonal_factor
-                GROUP BY month
+                SELECT sf.month,
+                       argMax(sf.seasonal_factor, sf.updated_at) as seasonal_factor,
+                       argMax(sf.revenue_factor, sf.updated_at) as revenue_factor,
+                       argMax(sf.quantity_factor, sf.updated_at) as quantity_factor,
+                       argMax(sf.is_peak_day, sf.updated_at) as is_peak_day,
+                       argMax(sf.peak_level, sf.updated_at) as peak_level,
+                       argMax(sf.peak_reason, sf.updated_at) as peak_reason
+                FROM retail_dw.int_dynamic_seasonal_factor sf
+                GROUP BY sf.month
             ) s ON toMonth(f.transaction_date) = s.month
             WHERE f.product_code IN ('{product_codes_str}')
               AND f.transaction_date >= today() - 60
@@ -2161,14 +2161,14 @@ class SalesForecaster:
             
             seasonal_query = f"""
             SELECT 
-                month,
-                argMax(peak_reason, updated_at) as peak_reason,
-                argMax(seasonal_factor, updated_at) as seasonal_factor,
-                argMax(quantity_factor, updated_at) as quantity_factor,
-                argMax(is_peak_day, updated_at) as is_peak_day
-            FROM retail_dw.int_dynamic_seasonal_factor
+                sf.month,
+                argMax(sf.peak_reason, sf.updated_at) as peak_reason,
+                argMax(sf.seasonal_factor, sf.updated_at) as seasonal_factor,
+                argMax(sf.quantity_factor, sf.updated_at) as quantity_factor,
+                argMax(sf.is_peak_day, sf.updated_at) as is_peak_day
+            FROM retail_dw.int_dynamic_seasonal_factor sf
             WHERE month IN ({months_str})
-            GROUP BY month
+            GROUP BY sf.month
             """
             try:
                 seasonal_df = self.ch.query(seasonal_query)
@@ -2657,18 +2657,19 @@ class SalesForecaster:
             'reorder_urgency': 'High' if total_predicted > avg_daily * 14 else 'Normal'
         }
     
+    
     def generate_purchase_order_csv(self, forecasts: pd.DataFrame = None, 
                                      top_n: int = 50,
                                      output_path: str = None) -> str:
         """
         Tạo file CSV đơn hàng cần đặt cho tuần tới
         
-        Logic ưu tiên:
-        1. Đảm bảo đủ lượng tồn kho tối thiểu (Tồn nhỏ nhất)
-        2. Sản phẩm bán được nhiều ưu tiên cao hơn
-        3. Sản phẩm tạo nhiều doanh thu được highlight (vàng - high margin)
-        
-        Công thức: Lượng cần nhập = MAX(Dự báo 7 ngày, Tồn nhỏ nhất) - Tồn kho hiện tại
+        Logic:
+        1. Lấy dự báo 7 ngày tới
+        2. Lấy tồn kho hiện tại từ ClickHouse
+        3. Lấy tỉ lệ quy đổi từ products
+        4. Công thức: Đơn đặt hàng = MAX(Dự báo 7 ngày, Tồn nhỏ nhất) - Tồn kho hiện tại
+        5. Làm tròn lên theo tỉ lệ quy đổi ĐVT
         
         Args:
             forecasts: DataFrame từ predict_next_week(). Nếu None sẽ chạy dự báo mới.
@@ -2694,8 +2695,8 @@ class SalesForecaster:
         product_list = forecasts['ma_hang'].unique().tolist()
         products_str = "', '".join(str(p) for p in product_list)
         
-        # 1. Lấy thông tin từ PostgreSQL (mã vạch, tồn nhỏ nhất)
-        logger.info("📥 Đang lấy thông tin tồn kho tối thiểu từ DanhSachSanPham...")
+        # 1. Lấy thông tin từ PostgreSQL (mã vạch, tồn nhỏ nhất, tỉ lệ quy đổi)
+        logger.info("📥 Đang lấy thông tin sản phẩm từ PostgreSQL...")
         try:
             from sqlalchemy import text
             with self.pg.get_connection() as conn:
@@ -2705,9 +2706,11 @@ class SalesForecaster:
                     ma_vach,
                     ten_hang,
                     thuong_hieu,
+                    don_vi_tinh,
                     gia_von_mac_dinh,
                     gia_ban_mac_dinh,
-                    COALESCE(ton_nho_nhat, 0) as ton_nho_nhat
+                    COALESCE(ton_nho_nhat, 0) as ton_nho_nhat,
+                    COALESCE(quy_doi, 1) as quy_doi
                 FROM products
                 WHERE ma_hang IN ('{products_str}')
                 """
@@ -2718,572 +2721,173 @@ class SalesForecaster:
                         'ma_vach': row['ma_vach'] or row['ma_hang'],
                         'ten_hang': row['ten_hang'],
                         'thuong_hieu': row['thuong_hieu'],
+                        'don_vi_tinh': row['don_vi_tinh'] or '',
                         'gia_von': row['gia_von_mac_dinh'] or 0,
                         'gia_ban': row['gia_ban_mac_dinh'] or 0,
                         'ton_nho_nhat': row['ton_nho_nhat'] or 0,
-                        'margin': ((row['gia_ban_mac_dinh'] - row['gia_von_mac_dinh']) / row['gia_von_mac_dinh'] * 100) 
-                                  if row['gia_von_mac_dinh'] and row['gia_von_mac_dinh'] > 0 else 0
+                        'quy_doi': row['quy_doi'] or 1
                     }
-                logger.info(f"✅ Loaded {len(product_info)} products from DanhSachSanPham")
+                logger.info(f"   ✅ Loaded {len(product_info)} products with conversion ratios")
         except Exception as e:
-            logger.warning(f"⚠️ Không thể load từ PostgreSQL: {e}")
+            logger.error(f"   ❌ Error loading product info: {e}")
             product_info = {}
         
-        # 2. Lấy tồn kho HIỆN TẠI từ inventory_transactions (PostgreSQL)
-        logger.info("📥 Đang lấy tồn kho hiện tại...")
+        # 2. Lấy tồn kho hiện tại từ ClickHouse
+        logger.info("📥 Đang lấy tồn kho hiện tại từ ClickHouse...")
         try:
-            from sqlalchemy import text
-            with self.pg.get_connection() as conn:
-                inventory_query = f"""
-                SELECT DISTINCT ON (ma_hang)
-                    ma_hang,
-                    ton_cuoi_ky as ton_hien_tai
-                FROM inventory_transactions
-                WHERE ma_hang IN ('{products_str}')
-                ORDER BY ma_hang, ngay_bao_cao DESC
-                """
-                inventory_df = pd.read_sql(text(inventory_query), conn)
-                current_stock_map = dict(zip(inventory_df['ma_hang'], inventory_df['ton_hien_tai']))
-                logger.info(f"✅ Loaded current stock for {len(current_stock_map)} products")
-        except Exception as e:
-            logger.warning(f"⚠️ Không thể load tồn kho hiện tại: {e}")
-            current_stock_map = {}
-        
-        # 3. Lấy số lượng bán THEO TUẦN (4 tuần gần nhất) để tính tồn kho tối ưu
-        logger.info("📊 Đang tính tồn kho tối ưu từ dữ liệu 4 tuần...")
-        try:
-            # Query dữ liệu bán theo tuần
-            weekly_sales_query = f"""
+            ch_query = f"""
             SELECT 
-                product_code as ma_hang,
-                toWeek(transaction_date) as week_num,
-                SUM(quantity_sold) as weekly_sold,
-                SUM(gross_revenue) as weekly_revenue
-            FROM retail_dw.fct_regular_sales
-            WHERE product_code IN ('{products_str}')
-              AND transaction_date >= today() - 28
-            GROUP BY product_code, toWeek(transaction_date)
-            ORDER BY product_code, week_num
+                ma_hang,
+                argMax(ton_cuoi_ky, snapshot_date) as current_stock
+            FROM retail_dw.staging_inventory_transactions
+            WHERE ma_hang IN ('{products_str}')
+            GROUP BY ma_hang
             """
-            weekly_df = self.ch.query(weekly_sales_query)
+            # Use PostgreSQL connector but query ClickHouse
+            # Actually, we need to use ClickHouse client
+            import subprocess
+            ch_result = subprocess.run([
+                'clickhouse-client', '--host', os.getenv('CLICKHOUSE_HOST', 'clickhouse'),
+                '--query', ch_query, '--format', 'CSVWithNames'
+            ], capture_output=True, text=True)
             
-            # Tính tồn kho tối ưu cho mỗi sản phẩm
-            # Công thức: tồn kho tối ưu = median(lượng bán tuần + tồn kho nhỏ nhất × 0.75) qua 4 tuần
-            optimal_inventory_map = {}
-            sales_map = {}
-            
-            for ma_hang in product_list:
-                # Lấy dữ liệu 4 tuần của sản phẩm này
-                product_weekly = weekly_df[weekly_df['ma_hang'] == ma_hang]
-                
-                if len(product_weekly) > 0:
-                    # Lấy tồn kho nhỏ nhất từ database
-                    ton_nho_nhat = product_info.get(ma_hang, {}).get('ton_nho_nhat', 0)
-                    
-                    # Tính tồn kho tối ưu cho mỗi tuần = bán tuần đó + tồn kho nhỏ nhất × 0.75
-                    weekly_optimal = []
-                    for _, week_row in product_weekly.iterrows():
-                        weekly_sold = week_row['weekly_sold'] or 0
-                        optimal_week = weekly_sold + (ton_nho_nhat * 0.75)
-                        weekly_optimal.append(optimal_week)
-                    
-                    # Lấy trung vị (median) của 4 tuần
-                    import numpy as np
-                    optimal_inventory = np.median(weekly_optimal) if weekly_optimal else 0
-                    
-                    optimal_inventory_map[ma_hang] = round(optimal_inventory)
-                    
-                    # Lưu thêm tổng doanh thu 4 tuần cho ưu tiên
-                    sales_map[ma_hang] = {
-                        'quantity_sold': product_weekly['weekly_sold'].sum() or 0,
-                        'revenue': product_weekly['weekly_revenue'].sum() or 0,
-                        'weekly_data': weekly_optimal
-                    }
-                else:
-                    optimal_inventory_map[ma_hang] = 0
-                    sales_map[ma_hang] = {'quantity_sold': 0, 'revenue': 0, 'weekly_data': []}
-            
-            logger.info(f"✅ Calculated optimal inventory for {len(optimal_inventory_map)} products")
-            logger.info(f"   Formula: median(weekly_sales + ton_nho_nhat × 0.75) over 4 weeks")
-        except Exception as e:
-            logger.warning(f"⚠️ Không thể tính tồn kho tối ưu: {e}")
-            optimal_inventory_map = {}
-            sales_map = {}
-        
-        # 4. Tổng hợp dự báo theo sản phẩm (7 ngày)
-        product_summary = forecasts.groupby(['ma_hang', 'ten_san_pham']).agg({
-            'predicted_quantity': 'sum'
-        }).reset_index()
-        product_summary.columns = ['ma_hang', 'ten_san_pham', 'forecast_7d']
-        
-        # 5. Thêm các thông tin bổ sung
-        product_summary['ma_vach'] = product_summary['ma_hang'].map(
-            lambda x: product_info.get(x, {}).get('ma_vach', x))
-        product_summary['ten_hang_day_du'] = product_summary['ma_hang'].map(
-            lambda x: product_info.get(x, {}).get('ten_hang', ''))
-        product_summary['ton_nho_nhat'] = product_summary['ma_hang'].map(
-            lambda x: product_info.get(x, {}).get('ton_nho_nhat', 0))
-        product_summary['ton_hien_tai'] = product_summary['ma_hang'].map(
-            lambda x: current_stock_map.get(x, 0))
-        product_summary['ton_kho_toi_uu'] = product_summary['ma_hang'].map(
-            lambda x: optimal_inventory_map.get(x, 0))  # Tồn kho tối ưu mới
-        product_summary['da_ban_4tuan'] = product_summary['ma_hang'].map(
-            lambda x: sales_map.get(x, {}).get('quantity_sold', 0))
-        product_summary['doanh_thu_4tuan'] = product_summary['ma_hang'].map(
-            lambda x: sales_map.get(x, {}).get('revenue', 0))
-        product_summary['margin_pct'] = product_summary['ma_hang'].map(
-            lambda x: product_info.get(x, {}).get('margin', 0))
-        
-        # 6. Tính LƯỢNG CẦN NHẬP
-        # Công thức mới: MAX(Dự báo 7 ngày, Tồn kho tối ưu) - Tồn kho hiện tại
-        # Trong đó: Tồn kho tối ưu = median(lượng bán tuần + tồn kho nhỏ nhất × 0.75) qua 4 tuần
-        product_summary['luong_can_nhap'] = (
-            product_summary[['forecast_7d', 'ton_kho_toi_uu']].max(axis=1) 
-            - product_summary['ton_hien_tai']
-        ).clip(lower=0)  # Không nhập số âm
-        
-        # 7. SẮP XẾP ƯU TIÊN
-        # Primary: Lượng cần nhập (nhiều nhất = cần gấp nhất)
-        # Secondary: Số lượng đã bán (bán nhiều = ưu tiên cao)
-        # Tertiary: Doanh thu (để highlight high value)
-        product_summary = product_summary.sort_values(
-            ['luong_can_nhap', 'da_ban_4tuan', 'doanh_thu_4tuan'], 
-            ascending=[False, False, False]
-        )
-        
-        # 8. Lấy top N sản phẩm
-        top_products = product_summary.head(top_n).copy()
-        
-        # Đánh dấu sản phẩm HIGH MARGIN (> 20% margin) và HIGH VALUE (top doanh thu)
-        top_products['is_high_margin'] = top_products['margin_pct'] > 20
-        top_products['is_high_value'] = top_products['doanh_thu_4tuan'] >= top_products['doanh_thu_4tuan'].quantile(0.8)
-        
-        logger.info(f"\n📊 Danh sách {len(top_products)} sản phẩm cần đặt hàng:")
-        logger.info(f"   - Tổng lượng cần nhập: {top_products['luong_can_nhap'].sum():,.0f} units")
-        logger.info(f"   - Tồn kho tối ưu TB: {top_products['ton_kho_toi_uu'].mean():,.0f} units")
-        logger.info(f"   - Công thức: median(weekly_sales + ton_nho_nhat × 0.75) over 4 weeks")
-        logger.info(f"   - Sản phẩm HIGH MARGIN (>20%): {top_products['is_high_margin'].sum()}")
-        logger.info(f"   - Sản phẩm HIGH VALUE (top 20%): {top_products['is_high_value'].sum()}")
-        
-        # 9. Tạo đơn hàng
-        purchase_orders = []
-        for idx, row in top_products.iterrows():
-            # Xác định mức độ ưu tiên
-            if row['luong_can_nhap'] > row['ton_hien_tai'] * 2:
-                uu_tien = '🔴 Cần gấp'
-            elif row['luong_can_nhap'] > 0:
-                uu_tien = '🟡 Cần đủ'
+            if ch_result.returncode == 0:
+                from io import StringIO
+                stock_df = pd.read_csv(StringIO(ch_result.stdout))
+                current_stock = dict(zip(stock_df['ma_hang'], stock_df['current_stock']))
+                logger.info(f"   ✅ Loaded current stock for {len(current_stock)} products")
             else:
-                uu_tien = '🟢 Đủ hàng'
+                logger.warning(f"   ⚠️ Could not query ClickHouse: {ch_result.stderr}")
+                current_stock = {}
+        except Exception as e:
+            logger.warning(f"   ⚠️ Error loading inventory data: {e}")
+            current_stock = {}
+        
+        # 3. Tính toán đơn đặt hàng
+        logger.info("🧮 Tính toán đơn đặt hàng...")
+        
+        # Aggregate forecasts by product
+        forecast_agg = forecasts.groupby('ma_hang').agg({
+            'predicted_quantity': 'sum',
+            'predicted_revenue': 'sum'
+        }).reset_index()
+        
+        purchase_orders = []
+        for _, row in forecast_agg.iterrows():
+            ma_hang = row['ma_hang']
+            forecast_qty = row['predicted_quantity']
+            forecast_revenue = row['predicted_revenue']
             
-            # Ghi chú highlight
-            ghi_chu = ''
-            if row['is_high_margin'] and row['is_high_value']:
-                ghi_chu = '⭐ HIGH MARGIN + HIGH VALUE'
-            elif row['is_high_margin']:
-                ghi_chu = '💰 HIGH MARGIN'
-            elif row['is_high_value']:
-                ghi_chu = '💎 HIGH VALUE'
+            # Get product info
+            info = product_info.get(ma_hang, {})
+            if not info:
+                continue
+            
+            # Get current stock (default 0 if not found)
+            stock = current_stock.get(ma_hang, 0)
+            
+            # Get minimum stock requirement
+            min_stock = info.get('ton_nho_nhat', 0)
+            
+            # Get conversion ratio
+            ti_le = info.get('quy_doi', 1)
+            if ti_le <= 0:
+                ti_le = 1
+            
+            # Calculate required quantity
+            required = max(forecast_qty, min_stock) - stock
+            
+            # If required is negative or zero, no need to order
+            if required <= 0:
+                continue
+            
+            # Round up to nearest conversion ratio
+            # Example: if required=5, ti_le=6 → order_qty=6
+            # Example: if required=7, ti_le=6 → order_qty=12
+            order_qty = ((int(required) + ti_le - 1) // ti_le) * ti_le
+            
+            # Calculate order value
+            order_value = order_qty * (info.get('gia_von', 0) or 0)
             
             purchase_orders.append({
-                'stt': len(purchase_orders) + 1,
-                'ma_hang': row['ma_hang'],
-                'ma_vach': row['ma_vach'],
-                'ten_san_pham': row['ten_hang_day_du'] or row['ten_san_pham'],
-                'luong_can_nhap': round(row['luong_can_nhap']),
-                'ton_kho_toi_uu': round(row['ton_kho_toi_uu']),  # Tồn kho tối ưu mới
-                'ton_nho_nhat': round(row['ton_nho_nhat']),
-                'ton_hien_tai': round(row['ton_hien_tai']),
-                'du_bao_7ngay': round(row['forecast_7d']),
-                'da_ban_4tuan': round(row['da_ban_4tuan']),
-                'doanh_thu_4tuan': round(row['doanh_thu_4tuan']),
-                'margin_pct': round(row['margin_pct'], 1),
-                'uu_tien': uu_tien,
-                'ghi_chu': ghi_chu
+                'ma_hang': ma_hang,
+                'ma_vach': info.get('ma_vach', ma_hang),
+                'ten_hang': info.get('ten_hang', ''),
+                'thuong_hieu': info.get('thuong_hieu', ''),
+                'don_vi_tinh': info.get('don_vi_tinh', ''),
+                'du_bao_7_ngay': round(forecast_qty, 2),
+                'ton_kho_hien_tai': round(stock, 2),
+                'ton_nho_nhat': round(min_stock, 2),
+                'can_nhap_raw': round(required, 2),
+                'quy_doi': ti_le,
+                'so_luong_dat': order_qty,
+                'gia_von': info.get('gia_von', 0),
+                'gia_ban': info.get('gia_ban', 0),
+                'tong_gia_tri_dat': round(order_value, 2),
+                'du_bao_doanh_thu': round(forecast_revenue, 2)
             })
         
-        # 10. Tạo DataFrame và lưu file
+        # Sort by order value (descending)
+        purchase_orders.sort(key=lambda x: x['tong_gia_tri_dat'], reverse=True)
+        
+        # Take top N
+        purchase_orders = purchase_orders[:top_n]
+        
+        if not purchase_orders:
+            logger.warning("⚠️ No purchase orders generated (all products have sufficient stock)")
+            return None
+        
+        # Create DataFrame
         po_df = pd.DataFrame(purchase_orders)
-        po_df['stt'] = range(1, len(po_df) + 1)
         
+        # Generate output path
         if output_path is None:
-            output_dir = '/app/output' if os.path.exists('/app/output') else os.getcwd()
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            output_path = os.path.join(output_dir, f'purchase_order_{timestamp}.csv')
+            output_path = f"/tmp/purchase_order_{timestamp}.csv"
         
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        # Save to CSV
         po_df.to_csv(output_path, index=False, encoding='utf-8-sig')
         
-        logger.info(f"\n✅ Đã tạo file đơn hàng: {output_path}")
-        logger.info(f"   - Tổng lượng đặt: {po_df['luong_can_nhap'].sum():,.0f} units")
+        # Summary
+        total_order_value = po_df['tong_gia_tri_dat'].sum()
+        total_order_qty = po_df['so_luong_dat'].sum()
         
-        # Hiển thị top 15
-        logger.info("\n🔥 Top 15 sản phẩm ưu tiên đặt hàng:")
-        logger.info(f"{'STT':<4} {'Mã hàng':<10} {'Tên sản phẩm':<28} {'Cần nhập':<10} {'Tối ưu':<10} {'Hiện tại':<10} {'Ưu tiên':<12} {'Ghi chú'}")
-        logger.info("-" * 130)
-        for _, row in po_df.head(15).iterrows():
-            name_short = row['ten_san_pham'][:26] if len(str(row['ten_san_pham'])) > 26 else row['ten_san_pham']
-            logger.info(f"{row['stt']:<4} {row['ma_hang']:<10} {name_short:<28} "
-                       f"{row['luong_can_nhap']:>8,} {row['ton_kho_toi_uu']:>8,} {row['ton_hien_tai']:>8,} "
-                       f"{row['uu_tien']:<12} {row['ghi_chu']}")
+        logger.info("=" * 60)
+        logger.info("✅ ĐƠN HÀNG ĐÃ TẠO")
+        logger.info("=" * 60)
+        logger.info(f"📊 Số sản phẩm cần đặt: {len(po_df)}")
+        logger.info(f"📦 Tổng số lượng: {total_order_qty:,.0f}")
+        logger.info(f"💰 Tổng giá trị đặt hàng: {total_order_value:,.0f} VND")
+        logger.info(f"📁 File: {output_path}")
+        
+        # Show top 5
+        logger.info("\n🏆 Top 5 sản phẩm cần đặt nhiều nhất:")
+        for _, row in po_df.head(5).iterrows():
+            logger.info(f"   - {row['ma_hang']} | {row['ten_hang'][:30]} | "
+                       f"Cần: {row['can_nhap_raw']:.0f} | Đặt: {row['so_luong_dat']:.0f} | "
+                       f"Tỉ lệ: 1:{row['quy_doi']}")
         
         return output_path
-    
-    def send_error_notification(self, error_message: str, context: str = ""):
-        """Gửi thông báo lỗi qua email"""
-        if self.email_notifier:
-            try:
-                self.email_notifier.send_error_alert(error_message, context)
-            except Exception as e:
-                logger.error(f"Không thể gửi email lỗi: {e}")
-
-    def generate_comprehensive_report(self, days: int = 7) -> Dict:
-        """
-        Tạo báo cáo dự báo toàn diện từ cả 3 models
-        
-        Returns:
-            Dict chứa các phần của báo cáo
-        """
-        import pandas as pd
-        from datetime import datetime, timedelta
-        
-        logger.info("=" * 70)
-        logger.info("📊 TẠO BÁO CÁO DỰ BÁO TOÀN DIỆN")
-        logger.info("=" * 70)
-        
-        # Load models nếu chưa có
-        if not self.models:
-            for name in ['product_quantity', 'category_trend']:
-                model_path = os.path.join(self.model_dir, f'{name}_model.pkl')
-                if os.path.exists(model_path):
-                    self.models[name] = joblib.load(model_path)
-                    logger.info(f"✅ Loaded model: {name}")
-        
-        report = {
-            'generated_at': datetime.now().isoformat(),
-            'forecast_period_days': days,
-            'models_loaded': list(self.models.keys()),
-            'sections': {}
-        }
-        
-        # ========================================
-        # PHẦN 1: DỰ BÁO SỐ LƯỢNG (Model 1)
-        # ========================================
-        logger.info("\n" + "-" * 50)
-        logger.info("📦 PHẦN 1: DỰ BÁO SỐ LƯỢNG BÁN HÀNG (Model 1 - MdAPE)")
-        logger.info("-" * 50)
-        
-        try:
-            # Dự báo cho Top 50 sản phẩm cần nhập
-            forecasts = self.predict_next_week(use_abc_filter=True, abc_top_n=50)
-            
-            if len(forecasts) > 0:
-                # Tính tổng theo sản phẩm (dùng predicted_quantity)
-                product_totals = forecasts.groupby('ma_hang').agg({
-                    'predicted_quantity': 'sum',
-                    'predicted_quantity_raw': 'sum',
-                    'ten_san_pham': 'first',
-                    'nhom_hang_cap_1': 'first',
-                    'nhom_hang_cap_2': 'first',
-                    'abc_class': 'first'
-                }).sort_values('predicted_quantity', ascending=False)
-                
-                # Top 15 sản phẩm
-                top_quantity = product_totals.head(15)
-                
-                logger.info(f"\n📊 TỔNG QUAN DỰ BÁO:")
-                logger.info(f"   • Tổng số sản phẩm: {forecasts['ma_hang'].nunique()}")
-                logger.info(f"   • Tổng số ngày dự báo: 7 ngày")
-                logger.info(f"   • Tổng số lượng dự báo: {int(forecasts['predicted_quantity'].sum())} units")
-                
-                logger.info("\n🔥 Top 15 Sản phẩm dự báo bán chạy nhất (7 ngày tới):")
-                for idx, (product, row) in enumerate(top_quantity.iterrows(), 1):
-                    qty = row['predicted_quantity']
-                    cat = row['nhom_hang_cap_1']
-                    name = row.get('ten_san_pham', 'N/A')[:30]  # Giới hạn 30 ký tự
-                    abc = row.get('abc_class', 'N/A')
-                    logger.info(f"   {idx:2d}. {product} | {name:<30} | {qty:4d} units | {cat}")
-                
-                report['sections']['quantity_forecast'] = {
-                    'total_products': forecasts['ma_hang'].nunique(),
-                    'total_forecast_records': len(forecasts),
-                    'total_predicted_quantity': int(forecasts['predicted_quantity'].sum()),
-                    'total_predicted_quantity_raw': float(forecasts['predicted_quantity_raw'].sum()),
-                    'top_15_products': top_quantity.reset_index().to_dict('records')
-                }
-            else:
-                logger.warning("⚠️ Không có dữ liệu dự báo số lượng")
-                report['sections']['quantity_forecast'] = {'error': 'No forecast data'}
-                
-        except Exception as e:
-            logger.error(f"❌ Lỗi khi tạo dự báo số lượng: {e}")
-            report['sections']['quantity_forecast'] = {'error': str(e)}
-        
-        # ========================================
-        # PHẦN 2: XU HƯỚNG CATEGORY (Model 2)
-        # ========================================
-        logger.info("\n" + "-" * 50)
-        logger.info("📊 PHẦN 2: XU HƯỚNG THEO CATEGORY (Model 2 - Category Trend Forecast)")
-        logger.info("-" * 50)
-        
-        category_forecasts = pd.DataFrame()
-        try:
-            # Dự báo bằng Model 2 (Category-level)
-            category_forecasts = self.predict_category_trend(days=days)
-            
-            if not category_forecasts.empty:
-                # Tổng hợp theo category
-                model2_by_category = category_forecasts.groupby('nhom_hang_cap_1').agg({
-                    'predicted_quantity': 'sum',
-                    'seasonal_factor': 'mean',
-                    'is_peak_day': 'max'
-                }).sort_values('predicted_quantity', ascending=False)
-                
-                logger.info("\n📈 Model 2 - Dự báo theo Category (7 ngày tới):")
-                for cat, row in model2_by_category.head(10).iterrows():
-                    qty = row['predicted_quantity']
-                    sf = row['seasonal_factor']
-                    logger.info(f"   • {cat}: {qty:5.0f} units (seasonal: {sf:.2f})")
-                
-                report['sections']['category_trend'] = {
-                    'model2_by_category': model2_by_category.reset_index().to_dict('records'),
-                    'total_categories': category_forecasts['nhom_hang_cap_1'].nunique(),
-                    'total_forecast_records': len(category_forecasts),
-                    'confidence': 'MEDIUM - Using dynamic seasonal factors'
-                }
-            else:
-                logger.warning("⚠️ Model 2 không tạo được dự báo")
-                report['sections']['category_trend'] = {'error': 'No category forecast generated'}
-                
-        except Exception as e:
-            logger.error(f"❌ Lỗi khi chạy Model 2: {e}")
-            report['sections']['category_trend'] = {'error': str(e)}
-        
-        # ========================================
-        # PHẦN 3: VALIDATION - SO SÁNH VỚI DỮ LIỆU THỰC TẾ
-        # ========================================
-        logger.info("\n" + "-" * 50)
-        logger.info("📊 PHẦN 3: VALIDATION - SO SÁNH DỰ BÁO VỚI THỰC TẾ (7 ngày)")
-        logger.info("-" * 50)
-        
-        try:
-            validation_results = self.validate_forecast_accuracy(days_back=7)
-            report['sections']['validation'] = validation_results
-        except Exception as e:
-            logger.error(f"❌ Lỗi khi validation: {e}")
-            report['sections']['validation'] = {'error': str(e)}
-        
-        # ========================================
-        # PHẦN 4: SO SÁNH MODEL 1 vs MODEL 2
-        # ========================================
-        logger.info("\n" + "-" * 50)
-        logger.info("📊 PHẦN 4: SO SÁNH MODEL 1 VS MODEL 2")
-        logger.info("-" * 50)
-        
-        try:
-            if not forecasts.empty and not category_forecasts.empty:
-                comparison = self.compare_model_predictions(forecasts, category_forecasts)
-                report['sections']['model_comparison'] = comparison
-            else:
-                logger.warning("⚠️ Thiếu dữ liệu để so sánh models")
-                report['sections']['model_comparison'] = {'error': 'Insufficient data'}
-        except Exception as e:
-            logger.error(f"❌ Lỗi khi so sánh models: {e}")
-            report['sections']['model_comparison'] = {'error': str(e)}
-        
-        # ========================================
-        # PHẦN 5: KHUYẾN NGHỊ TỒN KHO
-        # ========================================
-        logger.info("\n" + "-" * 50)
-        logger.info("📋 PHẦN 5: KHUYẾN NGHỊ TỒN KHO")
-        logger.info("-" * 50)
-        
-        try:
-            if len(forecasts) > 0:
-                # Tính toán khuyến nghị cho top 10 sản phẩm có dự báo cao nhất
-                top_products = forecasts.groupby('ma_hang').agg({
-                    'predicted_quantity': 'sum',
-                    'ten_san_pham': 'first',
-                    'nhom_hang_cap_1': 'first'
-                }).sort_values('predicted_quantity', ascending=False).head(10)
-                
-                recommendations = []
-                logger.info("\n📦 Top 10 sản phẩm cần chú ý tồn kho:\n")
-                
-                for idx, (product, row) in enumerate(top_products.iterrows(), 1):
-                    try:
-                        qty = row['predicted_quantity']
-                        cat = row['nhom_hang_cap_1']
-                        name = row.get('ten_san_pham', 'N/A')[:30]  # Giới hạn 30 ký tự
-                        
-                        # Tính toán khuyến nghị đơn giản
-                        avg_daily = qty / 7
-                        safety_stock = round(avg_daily * 7 * 1.5)  # 1.5x weekly demand
-                        reorder_point = round(avg_daily * 14)  # 2 weeks
-                        suggested_order = round(avg_daily * 30)  # 1 month
-                        urgency = 'HIGH' if qty > avg_daily * 14 else 'NORMAL'
-                        
-                        rec = {
-                            'product_code': product,
-                            'product_name': name,
-                            'category': cat,
-                            'predicted_7_days': int(qty),
-                            'avg_daily_demand': round(avg_daily, 2),
-                            'safety_stock': safety_stock,
-                            'reorder_point': reorder_point,
-                            'suggested_order_quantity': suggested_order,
-                            'urgency': urgency
-                        }
-                        recommendations.append(rec)
-                        
-                        logger.info(f"   {idx:2d}. 📦 {product} | {name}")
-                        logger.info(f"       ({cat}) | Dự báo: {qty:3.0f} units")
-                        logger.info(f"       Safety stock: {safety_stock:3d} | Reorder point: {reorder_point:3d} | Mức độ ưu tiên: {urgency}")
-                        
-                    except Exception as e:
-                        continue
-                
-                report['sections']['inventory_recommendations'] = recommendations
-                logger.info(f"\n✅ Đã tạo {len(recommendations)} khuyến nghị tồn kho")
-            else:
-                logger.warning("⚠️ Không có dữ liệu để đưa ra khuyến nghị")
-                
-        except Exception as e:
-            logger.error(f"❌ Lỗi khi tạo khuyến nghị tồn kho: {e}")
-        
-        # Lưu báo cáo
-        report_path = os.path.join(self.model_dir, 'comprehensive_report.json')
-        with open(report_path, 'w', encoding='utf-8') as f:
-            # Chuyển đổi numpy types sang Python types
-            import json
-            def convert_to_serializable(obj):
-                if hasattr(obj, 'item'):  # numpy type
-                    return obj.item()
-                elif isinstance(obj, dict):
-                    return {k: convert_to_serializable(v) for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [convert_to_serializable(i) for i in obj]
-                return obj
-            
-            json.dump(convert_to_serializable(report), f, indent=2, ensure_ascii=False, default=str)
-        
-        logger.info(f"\n✅ Báo cáo đã được lưu tại: {report_path}")
-        logger.info("=" * 70)
-        
-        # Gửi email báo cáo nếu có forecasts
-        if 'forecasts' in locals() and len(forecasts) > 0 and self.email_notifier:
-            try:
-                logger.info("📧 Đang gửi email forecast report từ comprehensive report...")
-                
-                # THÊM DỮ LIỆU BÁN TUẦN TRƯỚC cho email report
-                logger.info("📊 Query doanh số tuần trước cho email report...")
-                try:
-                    product_list = forecasts['ma_hang'].unique().tolist()
-                    products_str = "', '".join(str(p) for p in product_list)
-                    
-                    last_week_query = f"""
-                    SELECT 
-                        f.product_code as ma_hang,
-                        SUM(f.quantity_sold) as last_week_sales,
-                        SUM(f.gross_revenue) as last_week_revenue
-                    FROM retail_dw.fct_regular_sales f
-                    WHERE f.product_code IN ('{products_str}')
-                      AND f.transaction_date >= today() - 14
-                      AND f.transaction_date < today() - 7
-                    GROUP BY f.product_code
-                    """
-                    last_week_df = self.ch.query(last_week_query)
-                    
-                    if not last_week_df.empty:
-                        # Merge vào forecasts
-                        forecasts = forecasts.merge(
-                            last_week_df[['ma_hang', 'last_week_sales']], 
-                            on='ma_hang', 
-                            how='left'
-                        )
-                        forecasts['last_week_sales'] = forecasts['last_week_sales'].fillna(0)
-                        total_last_week = forecasts['last_week_sales'].sum()
-                        logger.info(f"✅ Đã thêm last_week_sales: {total_last_week:,.0f} units")
-                    else:
-                        logger.warning("⚠️ Không có dữ liệu bán tuần trước")
-                        forecasts['last_week_sales'] = 0
-                except Exception as e:
-                    logger.warning(f"⚠️ Không thể lấy dữ liệu tuần trước: {e}")
-                    forecasts['last_week_sales'] = 0
-                
-                # Lấy inventory recommendations từ report
-                inventory_recs = report['sections'].get('inventory_recommendations', [])
-                
-                success = self.email_notifier.send_forecast_report(
-                    forecasts=forecasts,
-                    inventory_recommendations=inventory_recs,
-                    model_dir=self.model_dir
-                )
-                
-                if success:
-                    logger.info("✅ Đã gửi email forecast report từ comprehensive report")
-                else:
-                    logger.warning("⚠️ Không thể gửi email forecast report")
-            except Exception as e:
-                logger.error(f"❌ Lỗi khi gửi email từ comprehensive report: {e}")
-        
-        return report
 
 
 if __name__ == '__main__':
     import argparse
-    
-    parser = argparse.ArgumentParser(description='ML Forecasting Pipeline')
-    parser.add_argument('--mode', choices=['train', 'predict', 'report', 'all'], 
-                       default='all', help='Chế độ chạy')
-    parser.add_argument('--no-tuning', action='store_true', 
-                       help='Tắt hyperparameter tuning (nhanh hơn)')
-    parser.add_argument('--trials', type=int, default=50,
-                       help='Số lần thử nghiệm hyperparameter tuning')
-    parser.add_argument('--days', type=int, default=0,
-                       help='Số ngày dữ liệu lịch sử để train. 0 = load toàn bộ (default: 0)')
-    parser.add_argument('--skip-if-no-new-data', action='store_true', default=True,
-                       help='Skip training nếu không có dữ liệu mới (mặc định: True)')
-    parser.add_argument('--force-train', action='store_true',
-                       help='Buộc train lại dù không có dữ liệu mới')
-    parser.add_argument('--min-new-days', type=int, default=1,
-                       help='Số ngày dữ liệu mới tối thiểu để train lại')
-    parser.add_argument('--deep', action='store_true',
-                       help='Deep training mode: 150 trials, full features (chậm hơn nhưng chính xác hơn)')
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['train', 'predict', 'po'], default='predict',
+                       help='train: train models, predict: generate forecasts, po: generate purchase order')
+    parser.add_argument('--top-n', type=int, default=50, help='Top N products for purchase order')
     args = parser.parse_args()
     
     forecaster = SalesForecaster()
     
-    if args.mode in ['train', 'all']:
-        logger.info("🚀 Mode: TRAINING")
-        
-        # Deep training mode: tăng trials và đảm bảo đủ dữ liệu
-        if args.deep:
-            n_trials = 150
-            logger.info("🔬 DEEP TRAINING MODE: 150 trials, extended features")
+    if args.mode == 'train':
+        forecaster.train_models()
+    elif args.mode == 'predict':
+        forecasts = forecaster.predict_next_week()
+        print(f"Generated forecasts for {len(forecasts)} rows")
+    elif args.mode == 'po':
+        csv_path = forecaster.generate_purchase_order_csv(top_n=args.top_n)
+        if csv_path:
+            print(f"Purchase order saved to: {csv_path}")
         else:
-            n_trials = args.trials
-            
-        metrics = forecaster.train_all_models(
-            use_tuning=not args.no_tuning,
-            n_trials=n_trials,
-            days=args.days,
-            send_email=True
-        )
-        logger.info(f"✅ Training completed with metrics: {list(metrics.keys())}")
-    
-    if args.mode in ['predict', 'all']:
-        logger.info("🔮 Mode: PREDICTION")
-        # Dự báo Top 50 sản phẩm cần nhập (theo doanh thu lịch sử)
-        forecasts = forecaster.predict_next_week(use_abc_filter=True, abc_top_n=50)
-        if len(forecasts) > 0:
-            forecaster.save_forecasts(forecasts, send_email=True)
-            logger.info(f"✅ Generated and saved {len(forecasts)} forecasts")
-        else:
-            logger.warning("⚠️ No forecasts generated")
-    
-    if args.mode in ['report', 'all']:
-        logger.info("📊 Mode: COMPREHENSIVE REPORT")
-        report = forecaster.generate_comprehensive_report()
-        logger.info(f"✅ Report generated with sections: {list(report['sections'].keys())}")
+            print("No purchase order generated")

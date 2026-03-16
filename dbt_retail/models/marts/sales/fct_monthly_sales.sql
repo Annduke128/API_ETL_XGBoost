@@ -1,37 +1,25 @@
 {{
     config(
-        materialized='incremental',
+        materialized='table',
         engine='MergeTree()',
         partition_by='toYYYYMM(month)',
         order_by=['month', 'product_code', 'branch_code'],
-        unique_key=['month', 'product_code', 'branch_code'],
-        incremental_strategy='delete+insert',
-        tags=['marts', 'sales', 'monthly', 'incremental']
+        tags=['marts', 'sales', 'monthly']
     )
 }}
 
-WITH daily_source AS (
-    SELECT * FROM {{ ref('fct_daily_sales') }}
-    {% if is_incremental() %}
-    WHERE transaction_date >= (SELECT MAX(month) - 35 FROM {{ this }})
-    {% endif %}
-),
-
-monthly_aggregated AS (
-    SELECT
-        toStartOfMonth(transaction_date) as month,
-        toYYYYMM(transaction_date) as month_key,
-        product_code,
-        branch_code,
-        SUM(daily_quantity) as monthly_quantity,
-        SUM(daily_revenue) as monthly_revenue,
-        SUM(daily_cost) as monthly_cost,
-        SUM(daily_profit) as monthly_profit,
-        AVG(daily_profit_margin) as avg_profit_margin,
-        COUNT(DISTINCT transaction_date) as active_days,
-        now() as etl_timestamp
-    FROM daily_source
-    GROUP BY toStartOfMonth(transaction_date), toYYYYMM(transaction_date), product_code, branch_code
-)
-
-SELECT * FROM monthly_aggregated
+SELECT
+    toStartOfMonth(ngay) as month,
+    toYYYYMM(ngay) as month_key,
+    td.ma_hang as product_code,
+    t.ma_chi_nhanh as branch_code,
+    SUM(td.so_luong) as monthly_quantity,
+    SUM(td.thanh_tien) as monthly_revenue,
+    SUM(td.don_gia * td.so_luong * 0.7) as monthly_cost,
+    SUM(td.thanh_tien - (td.don_gia * td.so_luong * 0.7)) as monthly_profit,
+    0.3 as avg_profit_margin,
+    COUNT(DISTINCT ngay) as active_days,
+    now() as etl_timestamp
+FROM {{ source('retail_source', 'raw_transaction_details') }} td
+JOIN {{ source('retail_source', 'raw_transactions') }} t ON td.transaction_id = t.id
+GROUP BY toStartOfMonth(ngay), toYYYYMM(ngay), td.ma_hang, t.ma_chi_nhanh

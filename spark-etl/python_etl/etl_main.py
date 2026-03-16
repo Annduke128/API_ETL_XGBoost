@@ -49,6 +49,57 @@ def clean_numeric_udf(value):
     except:
         return 0.0
 
+@udf(returnType=IntegerType())
+def calculate_conversion_ratio(dvt, product_name):
+    """Calculate conversion ratio based on unit type (ĐVT)
+    
+    Logic:
+    - thùng/thung/carton → 6, 12, 24 (box)
+    - lốc/loc → 6, 12, 24 (pack)
+    - can/chai/gói/cái/bịch → 1 (single)
+    - hộp/hop → 1 hoặc 12
+    """
+    if not dvt:
+        return 1
+    
+    dvt_lower = str(dvt).lower().strip()
+    name_lower = str(product_name).lower() if product_name else ""
+    
+    # Box units (thùng)
+    if any(x in dvt_lower for x in ['thùng', 'thung', 'carton', 'thung carton']):
+        # Check if product name contains quantity hints
+        if 'x24' in name_lower or 'x 24' in name_lower:
+            return 24
+        elif 'x12' in name_lower or 'x 12' in name_lower:
+            return 12
+        elif 'x6' in name_lower or 'x 6' in name_lower:
+            return 6
+        else:
+            return 6  # Default for box
+    
+    # Pack units (lốc)
+    if any(x in dvt_lower for x in ['lốc', 'loc', 'pack']):
+        if 'x24' in name_lower or 'x 24' in name_lower:
+            return 24
+        elif 'x12' in name_lower or 'x 12' in name_lower:
+            return 12
+        elif 'x6' in name_lower or 'x 6' in name_lower:
+            return 6
+        else:
+            return 6  # Default for pack
+    
+    # Single units
+    if any(x in dvt_lower for x in ['can', 'chai', 'gói', 'goi', 'cái', 'cai', 'bịch', 'bich', 'hũ', 'hu']):
+        return 1
+    
+    # Box/Container - check quantity
+    if 'hộp' in dvt_lower or 'hop' in name_lower:
+        if 'x12' in name_lower or 'x 12' in name_lower:
+            return 12
+        return 1
+    
+    return 1  # Default
+
 def get_spark_session():
     return SparkSession.builder \
         .appName("Retail_ETL") \
@@ -102,21 +153,33 @@ def process_products_pyspark(spark):
             col_map['gia_ban'] = c
         elif 'mã vạch' in lc:
             col_map['ma_vach'] = c
+        elif 'quy' in lc and 'đổi' in lc:
+            col_map['quy_doi'] = c
     
-    df_clean = df.select(
+    # Clean numeric columns for prices
+    df_with_prices = df.select(
         trim(col(col_map.get('ma_hang', df.columns[0]))).alias("ma_hang"),
         coalesce(trim(col(col_map.get('ten_hang', df.columns[0]))), lit('')).alias("ten_hang"),
         coalesce(trim(col(col_map.get('don_vi_tinh', df.columns[0]))), lit('')).alias("don_vi_tinh"),
         col(col_map.get('nhom_hang', df.columns[0])).alias("nhom_hang_raw"),
+        # Add price columns with cleaning
+        clean_numeric_udf(col(col_map.get('gia_ban', lit('0')))).alias("gia_ban_mac_dinh"),
+        clean_numeric_udf(col(col_map.get('gia_von', lit('0')))).alias("gia_von_mac_dinh"),
+        # Add quy_doi column (default 1 if not present)
+        clean_numeric_udf(col(col_map.get('quy_doi', lit('1')))).cast("int").alias("quy_doi"),
         current_timestamp().alias("created_at")
     )
     
-    df_parsed = df_clean.withColumn("nhom_parsed", parse_nhom_hang_udf(col("nhom_hang_raw")))
+    df_parsed = df_with_prices.withColumn("nhom_parsed", parse_nhom_hang_udf(col("nhom_hang_raw")))
+    
     df_final = df_parsed.select(
         col("ma_hang"), col("ten_hang"), col("don_vi_tinh"),
         col("nhom_parsed.cap_1").alias("cap_1"),
         col("nhom_parsed.cap_2").alias("cap_2"),
         col("nhom_parsed.cap_3").alias("cap_3"),
+        col("gia_ban_mac_dinh"),
+        col("gia_von_mac_dinh"),
+        col("quy_doi"),
         col("created_at")
     ).dropDuplicates(["ma_hang"])
     
@@ -235,10 +298,23 @@ def process_sales_pyspark(spark):
             "driver": "org.postgresql.Driver"
         }
         
-        # Không xóa dữ liệu cũ, dùng INSERT IGNORE để bỏ qua duplicate
-        logger.info("   💾 Using INSERT IGNORE mode (skip duplicates)")
+        # TRUNCATE tables trước khi insert để tránh duplicate
+        logger.info("   🗑️  Truncating old data...")
+        import psycopg2
+        conn = psycopg2.connect(
+            host=os.getenv('POSTGRES_HOST','postgres'),
+            database=os.getenv('POSTGRES_DB','retail_db'),
+            user=os.getenv('POSTGRES_USER','retail_user'),
+            password=os.getenv('POSTGRES_PASSWORD','retail_password')
+        )
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE transaction_details CASCADE")
+            cur.execute("TRUNCATE TABLE transactions CASCADE")
+        conn.close()
+        logger.info("   ✅ Truncated old data")
         
-        trans_agg.write.jdbc(pg_url, "transactions", mode="ignore", properties=pg_props)
+        trans_agg.write.jdbc(pg_url, "transactions", mode="append", properties=pg_props)
         
         # Đọc lại transactions để lấy transaction_id
         trans_mapping = spark.read.jdbc(pg_url, "transactions", properties=pg_props).select("id", "ma_giao_dich")
@@ -252,8 +328,128 @@ def process_sales_pyspark(spark):
             col("thanh_tien").cast("double")
         )
         
-        details_with_id.write.jdbc(pg_url, "transaction_details", mode="append", properties=pg_props)
+        # Loại bỏ duplicate trong details trước khi insert
+        details_final = details_with_id.dropDuplicates(["transaction_id", "ma_hang"])
+        final_count = details_final.count()
+        logger.info(f"   📊 After dedup: {final_count} details (removed {details_count - final_count} duplicates)")
+        
+        details_final.write.jdbc(pg_url, "transaction_details", mode="append", properties=pg_props)
         logger.info(f"   ✅ {trans_count} trans, {details_count} details")
+
+def process_inventory_pyspark(spark):
+    """Process inventory files (BaoCaoXuatNhapTon) and write directly to ClickHouse"""
+    import glob
+    files = glob.glob(f"{CSV_INPUT}/*XuatNhapTon*.xlsx") + glob.glob(f"{CSV_INPUT}/*XuatNhapTon*.csv")
+    if not files:
+        logger.warning("⚠️ No inventory files found")
+        return
+    
+    file_path = files[0]
+    filename = os.path.basename(file_path)
+    ngay_bao_cao = parse_date_from_filename(filename)
+    logger.info(f"📦 Inventory: {filename} | Date: {ngay_bao_cao}")
+    
+    # Read with pandas bridge
+    df = read_csv_with_pandas_bridge(spark, file_path)
+    total_rows = df.count()
+    logger.info(f"   📊 Rows: {total_rows}")
+    
+    # Column mapping
+    col_map = {}
+    for c in df.columns:
+        lc = c.lower()
+        if 'nhóm' in lc and 'hàng' in lc:
+            col_map['nhom_hang'] = c
+        elif 'mã' in lc and 'hàng' in lc:
+            col_map['ma_hang'] = c
+        elif 'mã' in lc and 'vạch' in lc:
+            col_map['ma_vach'] = c
+        elif 'tên' in lc and 'hàng' in lc:
+            col_map['ten_hang'] = c
+        elif 'thương' in lc and 'hiệu' in lc:
+            col_map['thuong_hieu'] = c
+        elif 'đơn' in lc and 'vị' in lc and 'tính' in lc:
+            col_map['don_vi_tinh'] = c
+        elif 'chi' in lc and 'nhánh' in lc:
+            col_map['chi_nhanh'] = c
+        elif 'tồn' in lc and 'đầu' in lc:
+            col_map['ton_dau'] = c
+        elif 'giá' in lc and 'trị' in lc and 'đầu' in lc:
+            col_map['gia_tri_dau'] = c
+        elif 'sl' in lc and 'nhập' in lc:
+            col_map['sl_nhap'] = c
+        elif 'giá' in lc and 'trị' in lc and 'nhập' in lc:
+            col_map['gia_tri_nhap'] = c
+        elif 'sl' in lc and 'xuất' in lc:
+            col_map['sl_xuat'] = c
+        elif 'giá' in lc and 'trị' in lc and 'xuất' in lc:
+            col_map['gia_tri_xuat'] = c
+        elif 'tồn' in lc and 'cuối' in lc:
+            col_map['ton_cuoi'] = c
+        elif 'giá' in lc and 'trị' in lc and 'cuối' in lc:
+            col_map['gia_tri_cuoi'] = c
+    
+    # Build select expressions
+    select_exprs = []
+    
+    # String columns
+    string_defaults = {
+        'nhom_hang': '', 'ma_hang': '', 'ma_vach': '', 'ten_hang': '',
+        'thuong_hieu': '', 'don_vi_tinh': '', 'chi_nhanh': ''
+    }
+    for key, default in string_defaults.items():
+        if key in col_map:
+            select_exprs.append(coalesce(trim(col(col_map[key])), lit(default)).alias(key))
+        else:
+            select_exprs.append(lit(default).alias(key))
+    
+    # Numeric columns
+    numeric_defaults = {
+        'ton_dau_ky': 0, 'gia_tri_dau_ky': 0, 'sl_nhap': 0, 'gia_tri_nhap': 0,
+        'sl_xuat': 0, 'gia_tri_xuat': 0, 'ton_cuoi_ky': 0, 'gia_tri_cuoi_ky': 0
+    }
+    col_mapping_numeric = {
+        'ton_dau_ky': 'ton_dau', 'gia_tri_dau_ky': 'gia_tri_dau',
+        'sl_nhap': 'sl_nhap', 'gia_tri_nhap': 'gia_tri_nhap',
+        'sl_xuat': 'sl_xuat', 'gia_tri_xuat': 'gia_tri_xuat',
+        'ton_cuoi_ky': 'ton_cuoi', 'gia_tri_cuoi_ky': 'gia_tri_cuoi'
+    }
+    for target, source in col_mapping_numeric.items():
+        if source in col_map:
+            select_exprs.append(clean_numeric_udf(col(col_map[source])).cast("double").alias(target))
+        else:
+            select_exprs.append(lit(numeric_defaults[target]).cast("double").alias(target))
+    
+    # Metadata columns
+    select_exprs.append(lit(ngay_bao_cao).cast("date").alias("snapshot_date"))
+    select_exprs.append(lit(filename).alias("source_file"))
+    select_exprs.append(current_timestamp().alias("created_at"))
+    
+    df_final = df.select(*select_exprs).filter(col("ma_hang").isNotNull() & (trim(col("ma_hang")) != ""))
+    final_count = df_final.count()
+    logger.info(f"   ✅ {final_count} inventory records after cleaning")
+    
+    # Write directly to ClickHouse
+    ch_url = f"jdbc:clickhouse://{os.getenv('CLICKHOUSE_HOST','clickhouse')}:8123/retail_dw"
+    ch_props = {
+        "user": os.getenv("CLICKHOUSE_USER","default"),
+        "password": os.getenv("CLICKHOUSE_PASSWORD",""),
+        "driver": "com.clickhouse.jdbc.ClickHouseDriver",
+        "batchsize": "10000"
+    }
+    
+    try:
+        # Overwrite mode for inventory - each snapshot replaces old data for that date
+        df_final.write.jdbc(ch_url, "staging_inventory_transactions", mode="append", properties=ch_props)
+        logger.info(f"   ✅ Written {final_count} records to ClickHouse.staging_inventory_transactions")
+        
+        # Show summary
+        total_ton_cuoi = df_final.agg(spark_sum("ton_cuoi_ky")).collect()[0][0] or 0
+        logger.info(f"   📊 Total closing stock: {total_ton_cuoi:,.0f}")
+        
+    except Exception as e:
+        logger.error(f"   ❌ Error writing to ClickHouse: {e}")
+        raise
 
 def main():
     logger.info("="*60)
@@ -263,6 +459,7 @@ def main():
     spark = get_spark_session()
     try:
         process_products_pyspark(spark)
+        process_inventory_pyspark(spark)  # NEW: Direct to ClickHouse
         process_sales_pyspark(spark)
         logger.info("="*60)
         logger.info("✅ Complete!")
