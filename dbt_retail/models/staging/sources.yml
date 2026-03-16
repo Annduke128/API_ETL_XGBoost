@@ -1,10 +1,121 @@
 version: 2
+
 sources:
   - name: retail_source
     database: "{{ env_var('CLICKHOUSE_DB', 'retail_dw') }}"
     schema: "{{ env_var('CLICKHOUSE_DB', 'retail_dw') }}"
+    description: "Staging data trong ClickHouse (đồng bộ từ PostgreSQL)"
+    
     tables:
-      - name: raw_products
-      - name: raw_branches  
-      - name: raw_transactions
-      - name: raw_transaction_details
+      - name: staging_products
+        description: "Danh mục sản phẩm (staging từ PostgreSQL)"
+        columns:
+          - name: id
+          - name: ma_hang
+            description: "Mã hàng"
+          - name: ten_hang
+            description: "Tên hàng"
+          - name: don_vi_tinh
+            description: "Đơn vị tính"
+          - name: cap_1
+            description: "Nhóm hàng cấp 1"
+          - name: cap_2
+            description: "Nhóm hàng cấp 2"
+          - name: cap_3
+            description: "Nhóm hàng cấp 3"
+          - name: gia_ban_mac_dinh
+            description: "Giá bán mặc định"
+          - name: gia_von_mac_dinh
+            description: "Giá vốn mặc định"
+          - name: quy_doi
+            description: "Tỷ lệ quy đổi"
+      
+      - name: staging_transactions
+        description: "Bảng giao dịch (staging từ PostgreSQL)"
+        columns:
+          - name: id
+            description: "Khóa chính"
+          - name: ma_giao_dich
+            description: "Mã giao dịch"
+          - name: ngay
+            description: "Ngày giao dịch (String YYYY-MM-DD)"
+          - name: ma_chi_nhanh
+            description: "Mã chi nhánh"
+          - name: ten_chi_nhanh
+            description: "Tên chi nhánh"
+      
+      - name: staging_transaction_details
+        description: "Chi tiết giao dịch (staging từ PostgreSQL)"
+        columns:
+          - name: id
+          - name: transaction_id
+            description: "ID giao dịch (FK)"
+          - name: ma_hang
+            description: "Mã hàng"
+          - name: ten_hang
+            description: "Tên hàng"
+          - name: so_luong
+            description: "Số lượng"
+          - name: don_gia
+            description: "Đơn giá"
+          - name: chiet_khau
+            description: "Chiết khấu"
+          - name: thue_gtgt
+            description: "Thuế GTGT"
+          - name: thanh_tien
+            description: "Thành tiền"
+      
+      - name: staging_branches
+        description: "Danh sách chi nhánh (staging từ PostgreSQL)"
+        columns:
+          - name: ma_chi_nhanh
+            description: "Mã chi nhánh"
+          - name: ten_chi_nhanh
+            description: "Tên chi nhánh"
+          - name: city
+            description: "Thành phố"
+      
+      - name: staging_inventory_transactions
+        description: "Dữ liệu tồn kho (import trực tiếp từ Excel)"
+        columns:
+          - name: ma_hang
+            description: "Mã hàng"
+          - name: ten_hang
+            description: "Tên hàng"
+          - name: chi_nhanh
+            description: "Chi nhánh"
+          - name: ton_dau_ky
+            description: "Tồn đầu kỳ"
+          - name: sl_nhap
+            description: "Số lượng nhập"
+          - name: sl_xuat
+            description: "Số lượng xuất"
+          - name: ton_cuoi_ky
+            description: "Tồn cuối kỳ"
+          - name: snapshot_date
+            description: "Ngày snapshot"
+
+  # Configuration tables (tạo từ init.clickhouse)
+  - name: retail_dw
+    database: "{{ env_var('CLICKHOUSE_DB', 'retail_dw') }}"
+    schema: "{{ env_var('CLICKHOUSE_DB', 'retail_dw') }}"
+    description: "Configuration và lookup tables trong ClickHouse"
+    
+    tables:
+      - name: store_types
+        description: "Phân loại cửa hàng (KPDT, KCC, KCN, CTT, KVNT)"
+        columns:
+          - name: type_code
+            description: "Mã loại cửa hàng (KPDT, KCC, ...)"
+          - name: type_code_2
+            description: "Mã 2 ký tự (UP, AP, IZ, TM, RL)"
+          - name: type_name_vn
+            description: "Tên loại cửa hàng tiếng Việt"
+          - name: type_name_en
+            description: "Tên loại cửa hàng tiếng Anh"
+          - name: description
+            description: "Mô tả chi tiết"
+          - name: typical_area_m2
+            description: "Diện tích điển hình"
+          - name: target_customer
+            description: "Khách hàng mục tiêu"

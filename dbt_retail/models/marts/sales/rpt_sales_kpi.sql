@@ -4,17 +4,19 @@
         tags = ['marts', 'kpi', 'reporting']
     )
 }}
-
+-- rpt_sales_kpi: Sales KPI summary report
+-- Source: staging tables từ PostgreSQL sync
 WITH daily_sales AS (
     SELECT
-        ngay,
-        toYYYYMMDD(ngay) AS date_key,
-        SUM(thanh_tien) AS gross_revenue,
-        SUM(so_luong) AS quantity_sold,
-        COUNT(DISTINCT transaction_id) AS transaction_count
-    FROM {{ source('retail_source', 'raw_transaction_details') }} td
-    JOIN {{ source('retail_source', 'raw_transactions') }} t ON td.transaction_id = t.id
-    GROUP BY ngay
+        toDate(t.ngay) AS transaction_date,
+        toYYYYMMDD(toDate(t.ngay)) AS date_key,
+        SUM(td.thanh_tien) AS gross_revenue,
+        SUM(td.so_luong) AS quantity_sold,
+        COUNT(DISTINCT td.transaction_id) AS transaction_count
+    FROM {{ source('retail_source', 'staging_transaction_details') }} td
+    JOIN {{ source('retail_source', 'staging_transactions') }} t 
+        ON td.transaction_id = t.id
+    GROUP BY toDate(t.ngay)
 ),
 
 current_period AS (
@@ -24,8 +26,8 @@ current_period AS (
         SUM(quantity_sold) AS quantity,
         SUM(transaction_count) AS transactions
     FROM daily_sales
-    WHERE toYear(ngay) = toYear(today())
-      AND toMonth(ngay) = toMonth(today())
+    WHERE toYear(transaction_date) = toYear(today())
+      AND toMonth(transaction_date) = toMonth(today())
 ),
 
 previous_period AS (
@@ -35,8 +37,8 @@ previous_period AS (
         SUM(quantity_sold) AS quantity,
         SUM(transaction_count) AS transactions
     FROM daily_sales
-    WHERE toYear(ngay) = toYear(today() - toIntervalMonth(1))
-      AND toMonth(ngay) = toMonth(today() - toIntervalMonth(1))
+    WHERE toYear(transaction_date) = toYear(today() - toIntervalMonth(1))
+      AND toMonth(transaction_date) = toMonth(today() - toIntervalMonth(1))
 ),
 
 ytd AS (
@@ -46,8 +48,8 @@ ytd AS (
         SUM(quantity_sold) AS quantity,
         SUM(transaction_count) AS transactions
     FROM daily_sales
-    WHERE toYear(ngay) = toYear(today())
-      AND ngay <= today()
+    WHERE toYear(transaction_date) = toYear(today())
+      AND transaction_date <= today()
 ),
 
 kpi_summary AS (

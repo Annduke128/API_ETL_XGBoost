@@ -4,7 +4,8 @@
     tags = ['marts', 'products', 'abc', 'daily']
   )
 }}
-
+-- int_product_abc_classification: ABC classification for products based on revenue
+-- Source: staging tables từ PostgreSQL sync
 WITH product_revenue AS (
     SELECT 
         p.ma_hang AS product_code,
@@ -14,10 +15,12 @@ WITH product_revenue AS (
         p.cap_3 AS category_level_3,
         COALESCE(SUM(td.thanh_tien), 0) AS total_revenue,
         COALESCE(SUM(td.so_luong), 0) AS total_quantity,
-        COUNT(DISTINCT t.ngay) AS active_days
-    FROM {{ source('retail_source', 'raw_products') }} p
-    LEFT JOIN {{ source('retail_source', 'raw_transaction_details') }} td ON p.ma_hang = td.ma_hang
-    LEFT JOIN {{ source('retail_source', 'raw_transactions') }} t ON td.transaction_id = t.id
+        COUNT(DISTINCT toDate(t.ngay)) AS active_days
+    FROM {{ source('retail_source', 'staging_products') }} p
+    LEFT JOIN {{ source('retail_source', 'staging_transaction_details') }} td 
+        ON p.ma_hang = td.ma_hang
+    LEFT JOIN {{ source('retail_source', 'staging_transactions') }} t 
+        ON td.transaction_id = t.id
     GROUP BY p.ma_hang, p.ten_hang, p.cap_1, p.cap_2, p.cap_3
 ),
 

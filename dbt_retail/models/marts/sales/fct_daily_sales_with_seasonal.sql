@@ -7,17 +7,19 @@
         tags=['marts', 'sales', 'ml_features']
     )
 }}
-
+-- fct_daily_sales_with_seasonal: Daily sales with seasonal features
+-- Source: staging tables từ PostgreSQL sync
 WITH daily_sales AS (
     SELECT
-        t.ngay AS transaction_date,
+        toDate(t.ngay) AS transaction_date,
         td.ma_hang AS product_code,
         t.ma_chi_nhanh AS branch_code,
         SUM(td.so_luong) AS quantity_sold,
         SUM(td.thanh_tien) AS gross_revenue
-    FROM {{ source('retail_source', 'raw_transaction_details') }} td
-    JOIN {{ source('retail_source', 'raw_transactions') }} t ON td.transaction_id = t.id
-    GROUP BY t.ngay, td.ma_hang, t.ma_chi_nhanh
+    FROM {{ source('retail_source', 'staging_transaction_details') }} td
+    JOIN {{ source('retail_source', 'staging_transactions') }} t 
+        ON td.transaction_id = t.id
+    GROUP BY toDate(t.ngay), td.ma_hang, t.ma_chi_nhanh
 )
 
 SELECT 

@@ -4,17 +4,19 @@
         tags = ['marts', 'ml', 'forecasting']
     )
 }}
-
+-- fct_inventory_forecast_input: Inventory metrics for forecasting
+-- Source: staging tables từ PostgreSQL sync
 WITH daily_movement AS (
     SELECT
-        t.ngay AS transaction_date,
+        toDate(t.ngay) AS transaction_date,
         td.ma_hang AS product_code,
         COALESCE(td.ten_hang, '') AS product_name,
         SUM(td.so_luong) AS units_sold,
         SUM(td.thanh_tien) AS revenue
-    FROM {{ source('retail_source', 'raw_transaction_details') }} td
-    JOIN {{ source('retail_source', 'raw_transactions') }} t ON td.transaction_id = t.id
-    GROUP BY t.ngay, td.ma_hang, td.ten_hang
+    FROM {{ source('retail_source', 'staging_transaction_details') }} td
+    JOIN {{ source('retail_source', 'staging_transactions') }} t 
+        ON td.transaction_id = t.id
+    GROUP BY toDate(t.ngay), td.ma_hang, td.ten_hang
 ),
 
 inventory_stats AS (

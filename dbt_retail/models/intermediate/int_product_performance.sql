@@ -20,7 +20,7 @@ td_with_date AS (
         td.*,
         t.transaction_date
     FROM transaction_details td
-    JOIN transactions t ON td.transaction_id = t.transaction_id
+    JOIN transactions t ON td.transaction_id = toString(t.transaction_id)
 ),
 
 product_metrics AS (
@@ -62,6 +62,7 @@ product_metrics AS (
 abc_classification AS (
     SELECT
         *,
+        '' AS category_l3,  -- Placeholder, không có trong stg_transaction_details
         SUM(total_revenue) OVER (ORDER BY total_revenue DESC) 
             / SUM(total_revenue) OVER () AS revenue_cum_pct,
         

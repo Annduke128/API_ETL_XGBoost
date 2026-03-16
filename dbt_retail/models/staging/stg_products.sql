@@ -1,17 +1,47 @@
-{{ config(materialized='view') }}
-SELECT 
-    ma_hang AS product_id,
-    ma_hang AS product_code,
-    ten_hang AS product_name,
-    '' AS barcode,
-    '' AS brand,
-    don_vi_tinh AS unit_of_measure,
-    cap_1 AS category_level_1,
-    cap_2 AS category_level_2,
-    cap_3 AS category_level_3,
-    toFloat64(0) AS default_selling_price,
-    toFloat64(0) AS default_cost_price,
-    toFloat64(0) AS default_margin_rate,
-    created_at,
-    created_at AS updated_at
-FROM {{ source('retail_source', 'raw_products') }}
+{{
+    config(
+        materialized='view'
+    )
+}}
+
+-- Staging model cho products - chỉ select raw data từ ClickHouse
+-- Parsing được thực hiện trong stg_product_variant_parsing.sql
+
+WITH source AS (
+    SELECT * FROM {{ source('retail_source', 'staging_products') }}
+),
+
+renamed AS (
+    SELECT
+        id AS product_id,
+        ma_hang AS product_code,
+        -- ma_vach không có trong staging_products
+        '' AS barcode,
+        ten_hang AS product_name,           -- Raw name, chưa parse
+        -- thuong_hieu không có trong staging_products
+        '' AS brand,
+        
+        -- Phân loại 3 cấp (từ cap_1, cap_2, cap_3)
+        cap_1 AS category_level_1,
+        cap_2 AS category_level_2,
+        cap_3 AS category_level_3,
+        
+        -- Giá (từ ETL mới)
+        gia_von_mac_dinh AS default_cost_price,
+        gia_ban_mac_dinh AS default_selling_price,
+        quy_doi,
+        
+        -- Biên lợi nhuận mặc định
+        CASE 
+            WHEN gia_ban_mac_dinh > 0 
+            THEN (gia_ban_mac_dinh - gia_von_mac_dinh) / gia_ban_mac_dinh 
+            ELSE 0 
+        END AS default_margin_rate,
+        
+        created_at,
+        created_at AS updated_at
+        
+    FROM source
+)
+
+SELECT * FROM renamed

@@ -7,11 +7,70 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      initContainers:
+      - name: setup-dbt
+        image: annduke/hasu-dbt:latest
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        workingDir: /usr/app/dbt
+        command: ["sh", "-c"]
+        args:
+        - |
+          # Copy original DBT code
+          cp -r * /dbt/
+          
+          # Create directories if not exist
+          mkdir -p /dbt/models/marts/sales
+          mkdir -p /dbt/models/marts/inventory
+          mkdir -p /dbt/models/marts/products
+          mkdir -p /dbt/models/marts/core
+          mkdir -p /dbt/models/staging
+          mkdir -p /dbt/models/intermediate
+          
+          # Override staging models
+          cp /dbt-config/sources.yml /dbt/models/staging/
+          cp /dbt-config/stg_products.sql /dbt/models/staging/
+          cp /dbt-config/stg_transactions.sql /dbt/models/staging/
+          cp /dbt-config/stg_transaction_details.sql /dbt/models/staging/
+          cp /dbt-config/stg_branches.sql /dbt/models/staging/
+          cp /dbt-config/stg_product_variant_parsing.sql /dbt/models/staging/
+          cp /dbt-config/schema.yml /dbt/models/staging/
+          
+          # Override intermediate models
+          cp /dbt-intermediate/int_product_performance.sql /dbt/models/intermediate/ 2>/dev/null || true
+          cp /dbt-intermediate/int_branch_performance.sql /dbt/models/intermediate/ 2>/dev/null || true
+          
+          # Override marts models
+          cp /dbt-marts/fct_daily_sales.sql /dbt/models/marts/sales/ 2>/dev/null || true
+          cp /dbt-marts/fct_regular_sales.sql /dbt/models/marts/sales/ 2>/dev/null || true
+          cp /dbt-marts/fct_monthly_sales.sql /dbt/models/marts/sales/ 2>/dev/null || true
+          cp /dbt-marts/fct_promotional_sales.sql /dbt/models/marts/sales/ 2>/dev/null || true
+          cp /dbt-marts/rpt_sales_kpi.sql /dbt/models/marts/sales/ 2>/dev/null || true
+          cp /dbt-marts/int_product_abc_classification.sql /dbt/models/marts/products/ 2>/dev/null || true
+          
+          # Remove packages.yml to skip dbt deps
+          rm -f /dbt/packages.yml /dbt/package-lock.yml
+          
+          echo "DBT code setup complete"
+        volumeMounts:
+        - name: dbt-workspace
+          mountPath: /dbt
+        - name: dbt-config
+          mountPath: /dbt-config
+        - name: dbt-intermediate
+          mountPath: /dbt-intermediate
+        - name: dbt-marts
+          mountPath: /dbt-marts
       containers:
       - name: dbt
         image: annduke/hasu-dbt:latest
         imagePullPolicy: Always
-        workingDir: /usr/app/dbt
+        workingDir: /dbt
         command: ["sh", "-c"]
         args:
         - |
@@ -20,8 +79,8 @@ spec:
           cp profiles.yml /root/.dbt/
           
           # Clean and build
-          dbt clean
-          dbt build --profiles-dir /root/.dbt --exclude package:dbt_utils
+          dbt clean --profiles-dir /root/.dbt
+          dbt build --profiles-dir /root/.dbt
         envFrom:
         - configMapRef:
             name: hasu-ml-config
@@ -30,6 +89,8 @@ spec:
         volumeMounts:
         - name: dbt-home
           mountPath: /root/.dbt
+        - name: dbt-workspace
+          mountPath: /dbt
         resources:
           requests:
             memory: "1Gi"
@@ -40,3 +101,14 @@ spec:
       volumes:
       - name: dbt-home
         emptyDir: {}
+      - name: dbt-workspace
+        emptyDir: {}
+      - name: dbt-config
+        configMap:
+          name: dbt-code
+      - name: dbt-intermediate
+        configMap:
+          name: dbt-intermediate
+      - name: dbt-marts
+        configMap:
+          name: dbt-marts
