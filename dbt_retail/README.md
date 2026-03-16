@@ -8,8 +8,8 @@ DBT project cho Retail Data Pipeline - Transform dữ liệu từ ClickHouse sta
 
 | Tài liệu | Mô tả |
 |----------|-------|
-| **[DBT_WORKFLOW.md](DBT_WORKFLOW.md)** | 🔥 **ĐỌC TRƯỚC** - Tổng quan pipeline, schema chi tiết, data flow |
-| **[DBT_QUICK_REFERENCE.md](DBT_QUICK_REFERENCE.md)** | Hướng dẫn nhanh, common issues |
+| **[dbt_detail.md](dbt_detail.md)** | 🔥 **ĐỌC TRƯỚC** - Tổng quan pipeline, schema chi tiết, data flow |
+| **[dbt_quick_ref.md](dbt_quick_ref.md)** | Hướng dẫn nhanh, common issues |
 | [PIPELINE_MAP.md](../PIPELINE_MAP.md) | Tổng quan toàn bộ hệ thống |
 | [AGENTS.md](../AGENTS.md) | Hướng dẫn cho AI agents |
 
@@ -79,7 +79,7 @@ FROM retail_dw.fct_regular_sales
 
 **Trước khi sửa models:**
 
-1. ⭐ **ĐỌC [DBT_WORKFLOW.md](DBT_WORKFLOW.md)**
+1. ⭐ **ĐỌC [dbt_detail.md](dbt_detail.md)**
 2. Kiểm tra schema ClickHouse thực tế
 3. Đảm bảo match với PySpark ETL output
 4. Test trên K3s trước khi commit
