@@ -1306,11 +1306,26 @@ class SalesForecaster:
             train_func = lambda df, target, metric_type='mape': self.train_model(df, target, metric_type=metric_type)
             logger.info("⚡ Using default hyperparameters (no tuning)")
         
-        # Model 1: Product-level quantity forecast - Dùng MdAPE
+        # Model 1: Product-level quantity forecast - Chỉ train sản phẩm >= 14 ngày
         logger.info("\n" + "-" * 40)
         logger.info("📦 Model 1: Product-Level Quantity Forecast (MdAPE)")
+        logger.info("   Lọc sản phẩm có >= 14 ngày dữ liệu")
         logger.info("-" * 40)
-        self.models['product_quantity'] = train_func(df_features, 'daily_quantity', metric_type='mdape')
+        
+        # Đếm số ngày dữ liệu cho mỗi sản phẩm
+        product_day_counts = df_features.groupby('ma_hang')['ngay'].nunique()
+        qualified_products = product_day_counts[product_day_counts >= 7].index.tolist()
+        
+        logger.info(f"   📊 Tổng sản phẩm: {df_features['ma_hang'].nunique()}")
+        logger.info(f"   ✅ Sản phẩm đủ 7+ ngày: {len(qualified_products)} ({len(qualified_products)/df_features['ma_hang'].nunique()*100:.1f}%)")
+        
+        # Filter data cho Model 1
+        df_product_model = df_features[df_features['ma_hang'].isin(qualified_products)].copy()
+        
+        if len(qualified_products) < 50:
+            logger.warning(f"   ⚠️  Chỉ có {len(qualified_products)} sản phẩm đủ dữ liệu - Cân nhắc giảm ngưỡng xuống 3-5 ngày")
+        
+        self.models['product_quantity'] = train_func(df_product_model, 'daily_quantity', metric_type='mdape')
         
         # VALIDATION: Kiểm tra model đã train thành công
         if 'product_quantity' not in self.models or self.models['product_quantity'] is None:
@@ -1815,8 +1830,8 @@ class SalesForecaster:
                 (history_df['ma_hang'] == product)
             ].sort_values('ngay').reset_index(drop=True)
             
-            # COLD START HANDLING: Nếu ít hơn 2 ngày dữ liệu, dùng category median
-            if len(product_history) < 2:
+            # COLD START HANDLING: Nếu ít hơn 7 ngày dữ liệu, dùng category median (Model 2)
+            if len(product_history) < 7:
                 cat_median = category_stats_dict.get(cat1, 10)  # Default 10 nếu không tìm thấy category
                 cold_start_products.append({
                     'branch': branch,

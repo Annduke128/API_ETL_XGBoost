@@ -486,7 +486,7 @@ git push origin main
 
 ```
 Training Data Requirements:
-├── Minimum: 2 days (lag_1 only)
+├── Minimum: 14 days (for product-level training)
 ├── Recommended: 31+ days (lag_1, lag_7, lag_14, lag_30)
 └── Optimal: 90+ days (full features + stable rolling stats)
 ```
@@ -531,7 +531,7 @@ else:
 
 | Mức độ dữ liệu | Số ngày | Phương pháp | Độ tin cậy |
 |----------------|---------|-------------|------------|
-| Cold start | < 2 | Category median | LOW |
+| Cold start | < 7 | Category median (Model 2) | LOW |
 | Warm up | 2-14 | Model với limited lags | MEDIUM |
 | Stable | 14-30 | Full model features | HIGH |
 | Mature | > 30 | Full model + all lags | HIGH |
@@ -761,7 +761,7 @@ docker build -t hasu-spark-etl:latest .
 3. FEATURE ENGINEERING (create_features)
    ├── Time-based: day_of_week, month, is_weekend, is_holiday
    ├── Lag features (adaptive):
-   │   ├── lag_1:  requires >= 2 days
+   │   ├── lag_1:  requires >= 2 days (technical minimum)
    │   ├── lag_7:  requires >= 8 days
    │   ├── lag_14: requires >= 15 days
    │   └── lag_30: requires >= 31 days
@@ -780,7 +780,7 @@ docker build -t hasu-spark-etl:latest .
    ├── Select products (default: Top 50 ABC)
    ├── Load 60-day history (batch query)
    ├── For each product:
-   │   ├── IF < 2 days history: cold start (category median)
+   │   ├── IF < 14 days history: cold start (category median)
    │   └── ELSE: XGBoost prediction
    └── Generate 7-day forecast
 
@@ -797,8 +797,8 @@ docker build -t hasu-spark-etl:latest .
 
 **Important Notes:**
 - Lag features use pandas shift() grouped by (branch, product)
-- Cold start threshold: < 2 days of history
-- Training fails if < 2 days of data (not enough for lag_1)
+- Cold start threshold: < 7 days of history (use category-level Model 2)
+- Product-level training requires >= 7 days of data
 - Always validate data quality before training
 
 ---
