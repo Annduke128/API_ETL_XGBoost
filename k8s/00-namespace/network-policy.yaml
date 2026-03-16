@@ -25,13 +25,26 @@ spec:
         matchLabels:
           name: hasu-ml
   egress:
+  # Allow internal traffic
   - to:
     - namespaceSelector:
         matchLabels:
           name: hasu-ml
+  # Allow DNS
   - to: []
     ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
+  # Allow SMTP for email notifications (Gmail, etc.)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 587
+    - protocol: TCP
+      port: 465
+    - protocol: TCP
+      port: 25
