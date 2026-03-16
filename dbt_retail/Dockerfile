@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir \
     protobuf==4.25.3 \
     dbt-core==1.7.0 \
     dbt-postgres==1.7.0 \
-    dbt-clickhouse==1.7.0
+    dbt-clickhouse==1.7.0 \
+    clickhouse-driver==0.2.6
 
 # Set working directory
 WORKDIR /usr/app/dbt

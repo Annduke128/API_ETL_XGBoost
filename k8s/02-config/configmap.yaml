@@ -12,7 +12,7 @@ data:
   
   # ClickHouse
   CLICKHOUSE_HOST: "clickhouse.hasu-ml.svc.cluster.local"
-  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_PORT: "9000"
   CLICKHOUSE_DB: "retail_dw"
   CLICKHOUSE_USER: "default"
   

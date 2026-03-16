@@ -2039,14 +2039,20 @@ class SalesForecaster:
                     product_list = forecasts['ma_hang'].unique().tolist()
                     products_str = "', '".join(str(p) for p in product_list)
                     
+                    # Tìm ngày dữ liệu mới nhất và lấy tuần trước đó
                     last_week_query = f"""
+                    WITH max_date AS (
+                        SELECT MAX(transaction_date) as max_date 
+                        FROM retail_dw.fct_regular_sales
+                    )
                     SELECT 
                         f.product_code as ma_hang,
                         SUM(f.quantity_sold) as last_week_sales
                     FROM retail_dw.fct_regular_sales f
+                    CROSS JOIN max_date
                     WHERE f.product_code IN ('{products_str}')
-                      AND f.transaction_date >= today() - 14
-                      AND f.transaction_date < today() - 7
+                      AND f.transaction_date >= max_date.max_date - 14
+                      AND f.transaction_date < max_date.max_date - 7
                     GROUP BY f.product_code
                     """
                     last_week_df = self.ch.query(last_week_query)
@@ -2653,7 +2659,7 @@ class SalesForecaster:
             'product_code': product_code,
             'predicted_next_7_days': total_predicted,
             'avg_daily_demand': avg_daily,
-            'recommended_safety_stock': round(avg_daily * 7 * 1.5),  # 7 days * safety factor
+            'recommended_safety_stock': round(avg_daily * 7),  # Dự báo 7 ngày (chưa tính tồn nhỏ nhất)
             'reorder_point': round(avg_daily * 14),  # 2 weeks
             'suggested_order_quantity': round(avg_daily * 30),  # 1 month
             'reorder_urgency': 'High' if total_predicted > avg_daily * 14 else 'Normal'
@@ -2670,7 +2676,7 @@ class SalesForecaster:
         1. Lấy dự báo 7 ngày tới
         2. Lấy tồn kho hiện tại từ ClickHouse
         3. Lấy tỉ lệ quy đổi từ products
-        4. Công thức: Đơn đặt hàng = MAX(Dự báo 7 ngày, Tồn nhỏ nhất) - Tồn kho hiện tại
+        4. Công thức: Tồn kho tối ưu = MAX(Dự báo 7 ngày, Tồn nhỏ nhất), Cần nhập = MAX(Tồn kho tối ưu - Tồn kho hiện tại, 0)
         5. Làm tròn lên theo tỉ lệ quy đổi ĐVT
         
         Args:
@@ -2796,8 +2802,11 @@ class SalesForecaster:
             if ti_le <= 0:
                 ti_le = 1
             
-            # Calculate required quantity
-            required = max(forecast_qty, min_stock) - stock
+            # Calculate optimal stock = MAX(forecast, min_stock)
+            optimal_stock = max(forecast_qty, min_stock)
+            
+            # Calculate required quantity = MAX(optimal - current, 0)
+            required = max(optimal_stock - stock, 0)
             
             # If required is negative or zero, no need to order
             if required <= 0:

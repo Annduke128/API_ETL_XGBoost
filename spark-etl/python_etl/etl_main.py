@@ -434,7 +434,7 @@ def process_inventory_pyspark(spark):
     logger.info(f"   ✅ {final_count} inventory records after cleaning")
     
     # Write directly to ClickHouse
-    ch_url = f"jdbc:clickhouse://{os.getenv('CLICKHOUSE_HOST','clickhouse')}:8123/retail_dw"
+    ch_url = f"jdbc:clickhouse://{os.getenv('CLICKHOUSE_HOST','clickhouse')}:9000/retail_dw?protocol=native"
     ch_props = {
         "user": os.getenv("CLICKHOUSE_USER","default"),
         "password": os.getenv("CLICKHOUSE_PASSWORD",""),

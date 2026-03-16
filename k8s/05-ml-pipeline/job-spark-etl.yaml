@@ -10,7 +10,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: spark-etl
-        image: annduke/hasu-spark-etl:real-final-v16
+        image: annduke/hasu-spark-etl:real-final-v19
         imagePullPolicy: Always
         command: ["python3"]
         args: ["/opt/spark/python_etl/etl_main.py"]

@@ -228,90 +228,61 @@ class PostgreSQLConnector:
 
 
 class ClickHouseConnector:
-    """Connector cho ClickHouse (Data Warehouse) sử dụng HTTP API"""
+    """Connector cho ClickHouse (Data Warehouse) sử dụng Native Driver"""
     
     def __init__(self, host: str = None, port: int = None,
                  database: str = None, user: str = None,
                  password: str = None):
         # Lấy từ env vars nếu không được truyền
         import os
+        from clickhouse_driver import Client
+        
         self.host = host or os.getenv('CLICKHOUSE_HOST', 'clickhouse')
-        self.port = port or int(os.getenv('CLICKHOUSE_PORT', '8123'))
+        self.port = port or int(os.getenv('CLICKHOUSE_PORT', '9000'))
         self.database = database or os.getenv('CLICKHOUSE_DB', 'retail_dw')
         self.user = user or os.getenv('CLICKHOUSE_USER', 'default')
         self.password = password or os.getenv('CLICKHOUSE_PASSWORD', 'clickhouse_password')
         
-        # Build base URL for HTTP API
-        self.base_url = f"http://{self.host}:{self.port}"
+        # Khởi tạo native client
+        self.client = Client(
+            host=self.host,
+            port=self.port,
+            database=self.database,
+            user=self.user,
+            password=self.password,
+            settings={'use_numpy': True}
+        )
     
-    def _execute_http(self, query: str) -> pd.DataFrame:
-        """Execute query via HTTP API"""
-        import urllib.request
-        import urllib.parse
-        import io
+    def query(self, query: str) -> pd.DataFrame:
+        """Execute query và trả về DataFrame sử dụng native driver"""
+        result = self.client.execute(query, with_column_types=True)
         
-        # Add FORMAT TSVWithNames to get column headers
-        if 'FORMAT' not in query.upper():
-            query = query.strip() + ' FORMAT TSVWithNames'
+        if not result[0]:
+            # Empty result - create DataFrame with correct columns
+            columns = [col[0] for col in result[1]]
+            return pd.DataFrame(columns=columns)
         
-        params = {
-            'user': self.user,
-            'password': self.password,
-            'database': self.database,
-            'query': query
-        }
+        data, columns_info = result
+        columns = [col[0] for col in columns_info]
         
-        url = f"{self.base_url}/?{urllib.parse.urlencode(params)}"
-        
-        with urllib.request.urlopen(url, timeout=300) as response:
-            data = response.read().decode('utf-8')
-            
-        # Parse TSV format with header
-        df = pd.read_csv(io.StringIO(data), sep='\t')
+        df = pd.DataFrame(data, columns=columns)
         return df
     
     def insert_dataframe(self, table: str, df: pd.DataFrame, batch_size: int = 10000):
-        """Insert DataFrame vào ClickHouse via HTTP"""
-        import urllib.request
-        import urllib.parse
-        import io
-        
+        """Insert DataFrame vào ClickHouse sử dụng native driver"""
         columns = df.columns.tolist()
         
         # Insert theo batch
         for i in range(0, len(df), batch_size):
             batch_df = df.iloc[i:i+batch_size]
             
-            # Convert to TSV format
-            tsv_buffer = io.StringIO()
-            batch_df.to_csv(tsv_buffer, sep='\t', header=False, index=False)
-            tsv_data = tsv_buffer.getvalue()
+            # Convert to records
+            data = [tuple(row) for row in batch_df.values]
             
-            query = f"INSERT INTO {self.database}.{table} ({', '.join(columns)}) FORMAT TSV"
-            
-            params = {
-                'user': self.user,
-                'password': self.password,
-                'database': self.database,
-                'query': query
-            }
-            
-            url = f"{self.base_url}/?{urllib.parse.urlencode(params)}"
-            
-            req = urllib.request.Request(
-                url,
-                data=tsv_data.encode('utf-8'),
-                headers={'Content-Type': 'text/plain'}
-            )
-            
-            with urllib.request.urlopen(req, timeout=300) as response:
-                response.read()
+            query = f"INSERT INTO {self.database}.{table} ({', '.join(columns)}) VALUES"
+            self.client.execute(query, data)
         
         logger.info(f"Inserted {len(df)} rows into {table}")
-    
-    def query(self, query: str) -> pd.DataFrame:
-        """Execute query và trả về DataFrame"""
-        return self._execute_http(query)
 
 
 

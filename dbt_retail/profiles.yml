@@ -3,9 +3,9 @@ retail_profile:
   outputs:
     clickhouse:
       type: clickhouse
-      driver: http
+      driver: native
       host: "{{ env_var('CLICKHOUSE_HOST', 'localhost') }}"
-      port: "{{ env_var('CLICKHOUSE_PORT', '8123') | int }}"
+      port: "{{ env_var('CLICKHOUSE_PORT', '9000') | int }}"
       user: "{{ env_var('CLICKHOUSE_USER', 'default') }}"
       password: "{{ env_var('CLICKHOUSE_PASSWORD', 'clickhouse_password') }}"
       database: "{{ env_var('CLICKHOUSE_DB', 'retail_dw') }}"

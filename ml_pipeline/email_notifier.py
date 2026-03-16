@@ -615,14 +615,14 @@ class EmailNotifier:
             
             for product_code, group in grouped:
                 # Lấy thông tin cơ bản
-                name = group['ten_san_pham'].iloc[0] if 'ten_san_pham' in group.columns else ''
-                category = group['nhom_hang_cap_1'].iloc[0] if 'nhom_hang_cap_1' in group.columns else ''
+                name = str(group['ten_san_pham'].iloc[0] if 'ten_san_pham' in group.columns else '')
+                category = str(group['nhom_hang_cap_1'].iloc[0]) if 'nhom_hang_cap_1' in group.columns else ''
                 
                 # Dự báo tuần tới (predicted_quantity)
-                forecast_next_week = group['predicted_quantity'].sum() if 'predicted_quantity' in group.columns else 0
+                forecast_next_week = float(group['predicted_quantity'].sum() if 'predicted_quantity' in group.columns else 0)
                 
                 # Số lượng bán 1 tuần qua (last_week_sales)
-                last_week_sales = group['last_week_sales'].iloc[0] if 'last_week_sales' in group.columns else 0
+                last_week_sales = float(group['last_week_sales'].iloc[0]) if 'last_week_sales' in group.columns else 0
                 
                 # Tính xu hướng (tăng/giảm)
                 if last_week_sales > 0:
@@ -633,15 +633,15 @@ class EmailNotifier:
                 if trend_pct > 5:
                     trend_icon = '📈'
                     trend_class = 'trend-up'
-                    trend_text = f'+{trend_pct:.1f}%'
+                    trend_text = 'Tăng'
                 elif trend_pct < -5:
                     trend_icon = '📉'
                     trend_class = 'trend-down'
-                    trend_text = f'{trend_pct:.1f}%'
+                    trend_text = 'Giảm'
                 else:
                     trend_icon = '➡️'
                     trend_class = 'trend-stable'
-                    trend_text = f'{trend_pct:.1f}%'
+                    trend_text = 'Ổn định'
                 
                 # Tồn kho tối ưu (safety_stock từ inventory_recs)
                 optimal_stock = 0
@@ -656,8 +656,8 @@ class EmailNotifier:
                 
                 # Nếu không có trong inventory_recs, tính từ forecast
                 if optimal_stock == 0 and forecast_next_week > 0:
-                    optimal_stock = int(forecast_next_week * 1.5)  # 1.5x dự báo
-                    suggested_order = int(forecast_next_week * 2)  # 2x dự báo
+                    optimal_stock = int(forecast_next_week)  # Tồn kho tối ưu = Dự báo (sẽ so sánh với tồn nhỏ nhất khi tính đơn đặt)
+                    suggested_order = max(0, optimal_stock - int(last_week_sales * 0.3))  # Ước tính: dự báo - tồn ước tính
                 
                 product_data.append({
                     'code': product_code,
@@ -673,7 +673,7 @@ class EmailNotifier:
                 })
             
             # Sắp xếp theo dự báo giảm dần
-            product_data.sort(key=lambda x: x['forecast_next_week'], reverse=True)
+            product_data.sort(key=lambda x: x['suggested_order'], reverse=True)
             
             # Tạo HTML cho bảng (top 50)
             for i, p in enumerate(product_data[:n_top], 1):
