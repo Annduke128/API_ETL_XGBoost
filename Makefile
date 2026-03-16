@@ -50,9 +50,9 @@ help:
 	@echo "║    make ml-fast         - Train without tuning                   ║"
 	@echo "║    make ml-optimal      - Train with 100 trials                  ║"
 	@echo "║    make ml-all          - Train + Predict + Report               ║"
-	@echo "║    make ml-predict      - Generate predictions only              ║
-ml-po           - Generate Purchase Order (top 50)       ║
-ml-po-100       - Generate Purchase Order (top 100)      ║"
+	@echo "║    make ml-predict      - Generate predictions only              ║"
+	@echo "║    make ml-po           - Generate Purchase Order (top 50)       ║"
+	@echo "║    make ml-po-100       - Generate Purchase Order (top 100)      ║"
 	@echo "║                                                                  ║"
 	@echo "║  CODE QUALITY                                                    ║"
 	@echo "║    make format          - Format code (black, isort)             ║"
