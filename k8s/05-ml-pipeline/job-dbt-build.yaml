@@ -56,6 +56,9 @@ spec:
           # Remove packages.yml to skip dbt deps
           rm -f /dbt/packages.yml /dbt/package-lock.yml
           
+          # Remove seeds folder to skip broken seed files in Docker image
+          rm -rf /dbt/seeds/*
+          
           echo "DBT code setup complete"
         volumeMounts:
         - name: dbt-workspace
