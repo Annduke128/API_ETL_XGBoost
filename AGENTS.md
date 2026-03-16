@@ -208,8 +208,8 @@ Developer → Push to main → GitHub Actions → Build Images
 | Service | Port | Mô tả |
 |---------|------|-------|
 | PostgreSQL | 5432 | OLTP Database |
-| ClickHouse HTTP | 8123 | Data Warehouse |
-| ClickHouse Native | 9000 | Data Warehouse |
+| ClickHouse HTTP | 8123 | Data Warehouse (HTTP - optional) |
+| ClickHouse Native | **9000** | Data Warehouse (Native Protocol) |
 | Redis | 6379 | Buffer & Cache |
 | Airflow Web | 8085 | Workflow Scheduler |
 | Superset | 8088 | BI Dashboard |
@@ -381,7 +381,7 @@ kubectl describe pvc <pvc-name> -n hasu-ml
 
 # Port forward để debug
 kubectl port-forward svc/postgres 5432:5432 -n hasu-ml
-kubectl port-forward svc/clickhouse 8123:8123 -n hasu-ml
+kubectl port-forward svc/clickhouse 9000:9000 -n hasu-ml  # Native protocol
 ```
 
 ---
@@ -887,6 +887,8 @@ EOFError: Unexpected EOF while reading bytes
 kubectl patch configmap -n hasu-ml hasu-ml-config \
   --type merge -p '{"data":{"CLICKHOUSE_PORT":"9000"}}'
 ```
+
+> **✅ RESOLVED**: All components now use native driver with port 9000 by default.
 
 ### Issue 2: Query Error - sf.updated_at not found
 
