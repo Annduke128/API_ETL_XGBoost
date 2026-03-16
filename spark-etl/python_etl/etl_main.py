@@ -234,13 +234,13 @@ def process_sales_pyspark(spark):
                 col_chi_nhanh = c
             elif 'mã' in lc and 'hàng' in lc:
                 col_ma_hang = c
-            elif 'số lượng' in lc:
+            elif 'số lượng' in lc or lc == 'sl':
                 col_so_luong = c
-            elif 'đơn giá' in lc:
+            elif 'đơn giá' in lc or 'giá bán/sp' in lc or 'giá bán' in lc:
                 col_don_gia = c
-            elif 'thành tiền' in lc:
+            elif 'thành tiền' in lc or 'doanh thu' in lc:
                 col_thanh_tien = c
-            elif 'tổng tiền' in lc:
+            elif 'tổng tiền' in lc or 'tổng tiền hàng' in lc:
                 col_tong_tien = c
             elif ('thờigian' in lc and 'giao dịch' in lc) or ('thờigian' in lc.replace(' ', '') and 'giao' in lc):
                 col_thoigian = c
@@ -284,10 +284,14 @@ def process_sales_pyspark(spark):
             current_timestamp().alias("created_at")
         )
         
+        # Tính thanh_tien từ don_gia * so_luong thay vì dùng cột Doanh thu (theo giao dịch)
+        # vì cột Doanh thu là tổng của cả giao dịch, không phải từng dòng sản phẩm
+        details_df = details_df.withColumn("thanh_tien_calc", col("don_gia") * col("so_luong"))
+        
         details_agg = details_df.groupBy("ma_giao_dich","ma_hang","created_at").agg(
             spark_sum("so_luong").alias("so_luong"),
             expr("avg(don_gia)").alias("don_gia"),
-            spark_sum("thanh_tien").alias("thanh_tien")
+            spark_sum("thanh_tien_calc").alias("thanh_tien")
         )
         details_count = details_agg.count()
         

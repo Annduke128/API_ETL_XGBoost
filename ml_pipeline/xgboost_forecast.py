@@ -240,15 +240,15 @@ class SalesForecaster:
             p.brand as thuong_hieu,
             p.abc_class
         FROM retail_dw.fct_regular_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
         LEFT JOIN (
             SELECT sf.month,
-                   argMax(sf.seasonal_factor, sf.updated_at) as seasonal_factor,
-                   argMax(sf.revenue_factor, sf.updated_at) as revenue_factor,
-                   argMax(sf.quantity_factor, sf.updated_at) as quantity_factor,
-                   argMax(sf.is_peak_day, sf.updated_at) as is_peak_day,
-                   argMax(sf.peak_level, sf.updated_at) as peak_level,
-                   argMax(sf.peak_reason, sf.updated_at) as peak_reason
+                   argMax(sf.seasonal_factor, sf.calculated_at) as seasonal_factor,
+                   argMax(sf.revenue_factor, sf.calculated_at) as revenue_factor,
+                   argMax(sf.quantity_factor, sf.calculated_at) as quantity_factor,
+                   argMax(sf.is_peak_day, sf.calculated_at) as is_peak_day,
+                   argMax(sf.peak_level, sf.calculated_at) as peak_level,
+                   argMax(sf.peak_reason, sf.calculated_at) as peak_reason
             FROM retail_dw.int_dynamic_seasonal_factor sf
             GROUP BY sf.month
         ) s ON toMonth(f.transaction_date) = s.month
@@ -395,7 +395,7 @@ class SalesForecaster:
             1.0 as quantity_factor,
             '' as peak_reason
         FROM retail_dw.fct_regular_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
         {date_filter}
         ORDER BY f.transaction_date
         """
@@ -479,7 +479,7 @@ class SalesForecaster:
             p.brand as thuong_hieu,
             p.abc_class
         FROM retail_dw.fct_daily_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
         WHERE lower(p.category_level_1) NOT LIKE '%khuyến mại%'
           AND lower(p.category_level_1) NOT LIKE '%khuyen mai%'
           {date_filter}
@@ -1514,7 +1514,7 @@ class SalesForecaster:
         """
         query = f"""
         SELECT 
-            "p.product_code" as ma_hang,
+            p.product_code as ma_hang,
             abc_class,
             total_historical_revenue
         FROM retail_dw.dim_product
@@ -1528,7 +1528,9 @@ class SalesForecaster:
         
         df = self.ch.query(query)
         logger.info(f"📊 Đã chọn {len(df)} sản phẩm cần nhập (Top {top_n} theo doanh thu)")
-        if len(df) > 0:
+        logger.info(f"📋 Columns: {list(df.columns)}")
+        logger.info(f"📋 First row: {df.iloc[0].to_dict() if len(df) > 0 else 'N/A'}")
+        if len(df) > 0 and 'abc_class' in df.columns:
             abc_summary = df.groupby('abc_class').size().to_dict()
             for cls, count in abc_summary.items():
                 logger.info(f"   - Loại {cls}: {count} sản phẩm")
@@ -1593,7 +1595,7 @@ class SalesForecaster:
                 products_query = """
                 SELECT DISTINCT f.product_code as ma_hang
                 FROM retail_dw.fct_daily_sales f
-                LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
+                LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
                 WHERE f.transaction_date >= today() - 30
                   AND lower(p.category_level_1) NOT LIKE '%khuyến mại%'
                   AND lower(p.category_level_1) NOT LIKE '%khuyen mai%'
@@ -1630,11 +1632,11 @@ class SalesForecaster:
             seasonal_query = f"""
             SELECT 
                 month,
-                argMax(sf.peak_reason, sf.updated_at) as peak_reason,
-                argMax(sf.seasonal_factor, sf.updated_at) as seasonal_factor,
-                argMax(sf.revenue_factor, sf.updated_at) as revenue_factor,
-                argMax(sf.quantity_factor, sf.updated_at) as quantity_factor,
-                argMax(sf.is_peak_day, sf.updated_at) as is_peak_day
+                argMax(sf.peak_reason, sf.calculated_at) as peak_reason,
+                argMax(sf.seasonal_factor, sf.calculated_at) as seasonal_factor,
+                argMax(sf.revenue_factor, sf.calculated_at) as revenue_factor,
+                argMax(sf.quantity_factor, sf.calculated_at) as quantity_factor,
+                argMax(sf.is_peak_day, sf.calculated_at) as is_peak_day
             FROM retail_dw.int_dynamic_seasonal_factor sf
             WHERE month IN ({months_str})
             GROUP BY sf.month
@@ -1693,15 +1695,15 @@ class SalesForecaster:
                 COALESCE(s.quantity_factor, 1.0) as quantity_factor,
                 s.peak_reason
             FROM retail_dw.fct_regular_sales f
-            LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
+            LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
             LEFT JOIN (
                 SELECT sf.month,
-                       argMax(sf.seasonal_factor, sf.updated_at) as seasonal_factor,
-                       argMax(sf.revenue_factor, sf.updated_at) as revenue_factor,
-                       argMax(sf.quantity_factor, sf.updated_at) as quantity_factor,
-                       argMax(sf.is_peak_day, sf.updated_at) as is_peak_day,
-                       argMax(sf.peak_level, sf.updated_at) as peak_level,
-                       argMax(sf.peak_reason, sf.updated_at) as peak_reason
+                       argMax(sf.seasonal_factor, sf.calculated_at) as seasonal_factor,
+                       argMax(sf.revenue_factor, sf.calculated_at) as revenue_factor,
+                       argMax(sf.quantity_factor, sf.calculated_at) as quantity_factor,
+                       argMax(sf.is_peak_day, sf.calculated_at) as is_peak_day,
+                       argMax(sf.peak_level, sf.calculated_at) as peak_level,
+                       argMax(sf.peak_reason, sf.calculated_at) as peak_reason
                 FROM retail_dw.int_dynamic_seasonal_factor sf
                 GROUP BY sf.month
             ) s ON toMonth(f.transaction_date) = s.month
@@ -1731,7 +1733,7 @@ class SalesForecaster:
                 1.0 as quantity_factor,
                 '' as peak_reason
             FROM retail_dw.fct_regular_sales f
-            LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
+            LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
             WHERE f.product_code IN ('{product_codes_str}')
               AND f.transaction_date >= today() - 60
             ORDER BY f.branch_code, f.product_code, f.transaction_date
@@ -2162,10 +2164,10 @@ class SalesForecaster:
             seasonal_query = f"""
             SELECT 
                 sf.month,
-                argMax(sf.peak_reason, sf.updated_at) as peak_reason,
-                argMax(sf.seasonal_factor, sf.updated_at) as seasonal_factor,
-                argMax(sf.quantity_factor, sf.updated_at) as quantity_factor,
-                argMax(sf.is_peak_day, sf.updated_at) as is_peak_day
+                argMax(sf.peak_reason, sf.calculated_at) as peak_reason,
+                argMax(sf.seasonal_factor, sf.calculated_at) as seasonal_factor,
+                argMax(sf.quantity_factor, sf.calculated_at) as quantity_factor,
+                argMax(sf.is_peak_day, sf.calculated_at) as is_peak_day
             FROM retail_dw.int_dynamic_seasonal_factor sf
             WHERE month IN ({months_str})
             GROUP BY sf.month
@@ -2204,7 +2206,7 @@ class SalesForecaster:
                 false
             ) as is_holiday
         FROM retail_dw.fct_regular_sales f
-        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.`p.product_code`
+        LEFT JOIN retail_dw.dim_product p ON f.product_code = p.product_code
         WHERE p.category_level_1 IN ('{cats_str}')
           AND f.transaction_date >= today() - 60
           AND f.product_code IS NOT NULL

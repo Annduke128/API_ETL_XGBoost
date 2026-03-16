@@ -869,4 +869,66 @@ ORDER BY (snapshot_date, ma_hang, chi_nhanh);
 
 ---
 
-**Last Updated**: 2026-03-16 (Added inventory integration & purchase order)
+## 🐛 ML Pipeline Troubleshooting
+
+### Issue 1: ClickHouse Connection EOFError
+
+**Symptom:**
+```
+EOFError: Unexpected EOF while reading bytes
+```
+
+**Root Cause:** 
+- ConfigMap has `CLICKHOUSE_PORT=8123` (HTTP port)
+- But `clickhouse-driver` library requires port `9000` (native protocol)
+
+**Fix:**
+```bash
+kubectl patch configmap -n hasu-ml hasu-ml-config \
+  --type merge -p '{"data":{"CLICKHOUSE_PORT":"9000"}}'
+```
+
+### Issue 2: Query Error - sf.updated_at not found
+
+**Symptom:**
+```
+DB::Exception: Identifier 'sf.updated_at' cannot be resolved from table with name sf
+```
+
+**Root Cause:**
+- Table `int_dynamic_seasonal_factor` has column `calculated_at`, not `updated_at`
+
+**Fix:**
+In `ml_pipeline/xgboost_forecast.py`, replace all `sf.updated_at` with `sf.calculated_at` (21 occurrences).
+
+### Issue 3: Missing ml_forecasts Table
+
+**Symptom:**
+```
+psycopg2.errors.UndefinedTable: relation "ml_forecasts" does not exist
+```
+
+**Fix:**
+```sql
+CREATE TABLE IF NOT EXISTS ml_forecasts (
+    id SERIAL PRIMARY KEY,
+    forecast_date DATE NOT NULL,
+    chi_nhanh VARCHAR(100),
+    ma_hang VARCHAR(50),
+    ten_san_pham VARCHAR(500),
+    nhom_hang_cap_1 VARCHAR(200),
+    nhom_hang_cap_2 VARCHAR(200),
+    abc_class VARCHAR(10),
+    predicted_quantity FLOAT,
+    predicted_quantity_raw FLOAT,
+    predicted_revenue DECIMAL(15,2),
+    predicted_profit_margin FLOAT,
+    confidence_lower FLOAT,
+    confidence_upper FLOAT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+**Last Updated**: 2026-03-16 (Added ML pipeline troubleshooting & fixes)
