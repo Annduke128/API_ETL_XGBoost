@@ -520,7 +520,7 @@ class SalesForecaster:
                 'is_peak_day', 'peak_level', 'seasonal_factor', 'revenue_factor', 'quantity_factor', 'peak_reason'
             ])
     
-    def create_features(self, df: pd.DataFrame) -> pd.DataFrame:
+    def create_features(self, df: pd.DataFrame, prediction_mode: bool = False) -> pd.DataFrame:
         """
         Tạo features cho model.
         
@@ -533,6 +533,11 @@ class SalesForecaster:
         - Rolling statistics  
         - Growth rate
         - Categorical encoding
+        
+        Args:
+            df: DataFrame với dữ liệu
+            prediction_mode: Nếu True, chỉ tạo lag features >= 7 ngày
+                           để tránh sử dụng thông tin tuần hiện tại chưa dự báo
         """
         df = df.copy()
         
@@ -572,11 +577,22 @@ class SalesForecaster:
         n_unique_days = df['ngay'].nunique()
         
         # EXTENDED: Thêm lag 3 và 21 ngày cho model training sâu hơn
-        available_lags = [lag for lag in [1, 3, 7, 14, 21, 30] if lag < n_unique_days]
-        if not available_lags:
-            available_lags = [1]  # Ít nhất cần lag 1
+        all_lags = [1, 3, 7, 14, 21, 30]
         
-        logger.info(f"📊 Sử dụng lag features: {available_lags} (dữ liệu có {n_unique_days} ngày)")
+        # Khi prediction_mode, chỉ dùng lag >= 7 để tránh dùng tuần hiện tại chưa dự báo
+        if prediction_mode:
+            all_lags = [lag for lag in all_lags if lag >= 7]
+            if not all_lags:
+                all_lags = [7]  # Mặc định tối thiểu lag 7 cho prediction
+        
+        available_lags = [lag for lag in all_lags if lag < n_unique_days]
+        if not available_lags:
+            available_lags = [min(7, n_unique_days - 1)] if n_unique_days > 1 else [1]
+        
+        if prediction_mode:
+            logger.info(f"📊 Prediction mode - Lag features >= 7: {available_lags}")
+        else:
+            logger.info(f"📊 Training mode - Lag features: {available_lags} (dữ liệu có {n_unique_days} ngày)")
         
         for lag in available_lags:
             df[f'lag_{lag}_quantity'] = df.groupby(['chi_nhanh', 'ma_hang'])['daily_quantity'].shift(lag)
@@ -1628,16 +1644,16 @@ class SalesForecaster:
         history_df = self.ch.query(history_query)
         history_df['ngay'] = pd.to_datetime(history_df['ngay'])
         
-        # VALIDATION: Chỉ giữ lại records có dữ liệu bán thực tế
+        # VALIDATION: Chỉ giữ lại records có dữ liệu (giữ cả daily_quantity = 0)
         original_count = len(history_df)
         history_df = history_df[history_df['daily_quantity'].notna()]
-        history_df = history_df[history_df['daily_quantity'] > 0]
         history_df = history_df[history_df['daily_revenue'].notna()]
-        history_df = history_df[history_df['daily_revenue'] > 0]
+        # KHÔNG filter > 0 để giữ lại ngày không bán hàng (daily_quantity = 0)
+        # Model cần học được pattern "không bán hàng"
         
         filtered_count = len(history_df)
         if filtered_count < original_count:
-            logger.warning(f"⚠️  Đã loại bỏ {original_count - filtered_count:,} records không có dữ liệu bán hàng")
+            logger.warning(f"⚠️  Đã loại bỏ {original_count - filtered_count:,} records không có dữ liệu")
         
         # Fill NA cho các cột mới
         if 'thuong_hieu' in history_df.columns:
@@ -1718,7 +1734,8 @@ class SalesForecaster:
                     seasonal_factor = sf.get('seasonal_factor', 1.0)
                     
                     # Áp dụng seasonal factor vào category median
-                    predicted_qty = max(0, cat_median * seasonal_factor / 7)  # Chia 7 vì median là daily
+                    # cat_median đã là daily median, không cần chia 7
+                    predicted_qty = max(0, cat_median * seasonal_factor)
                     
                     forecasts.append({
                         'forecast_date': future_date.date(),
@@ -1738,7 +1755,10 @@ class SalesForecaster:
                     })
                 continue  # Skip phần dự báo bình thường
             
-            # Dự báo cho từng ngày trong tương lai
+            # Dự báo cho từng ngày trong tương lai (RECURSIVE FORECAST)
+            # Sau mỗi ngày dự báo, cập nhật kết quả vào product_history để tính lag đúng
+            predicted_values = {}  # Lưu các giá trị đã dự báo: {date: quantity}
+            
             for future_date in future_dates:
                 try:
                     # Lấy seasonal factors cho ngày này
@@ -1746,18 +1766,47 @@ class SalesForecaster:
                     sf = seasonal_map.get(month, {})
                     is_peak = 1 if sf.get('peak_reason') else 0
                     
-                    # Tạo row cho ngày cần dự báo
+                    # Cập nhật product_history với các giá trị đã dự báo trước đó trong tuần
+                    # Điều này đảm bảo lag features được tính đúng
+                    if predicted_values:
+                        for pred_date, pred_qty in predicted_values.items():
+                            # Tìm và cập nhật hoặc thêm vào product_history
+                            mask = product_history['ngay'] == pred_date
+                            if mask.any():
+                                product_history.loc[mask, 'daily_quantity'] = pred_qty
+                            else:
+                                # Thêm row mới với giá trị dự báo
+                                new_row = pd.DataFrame({
+                                    'ngay': [pred_date],
+                                    'chi_nhanh': [branch],
+                                    'ma_hang': [product],
+                                    'ten_san_pham': [product_name],
+                                    'nhom_hang_cap_1': [cat1],
+                                    'nhom_hang_cap_2': [cat2],
+                                    'daily_quantity': [pred_qty],
+                                    'daily_revenue': [0],  # Không dùng cho dự báo
+                                    'daily_profit': [0],
+                                    'transaction_count': [0],
+                                    'is_peak_day': [is_peak],
+                                    'seasonal_factor': [sf.get('seasonal_factor', 1.0)],
+                                    'revenue_factor': [sf.get('revenue_factor', 1.0)],
+                                    'quantity_factor': [sf.get('quantity_factor', 1.0)],
+                                    'peak_reason': [sf.get('peak_reason', '')]
+                                })
+                                product_history = pd.concat([product_history, new_row], ignore_index=True)
+                    
+                    # Tạo row cho ngày cần dự báo (daily_quantity = 0, sẽ được dự báo)
                     future_row = pd.DataFrame({
                         'ngay': [future_date],
                         'chi_nhanh': [branch],
                         'ma_hang': [product],
+                        'ten_san_pham': [product_name],
                         'nhom_hang_cap_1': [cat1],
                         'nhom_hang_cap_2': [cat2],
-                        'daily_quantity': [0],
+                        'daily_quantity': [0],  # Sẽ được dự báo
                         'daily_revenue': [0],
                         'daily_profit': [0],
                         'transaction_count': [0],
-                        # DYNAMIC SEASONAL FACTORS - cho XGBoost học
                         'is_peak_day': [is_peak],
                         'seasonal_factor': [sf.get('seasonal_factor', 1.0)],
                         'revenue_factor': [sf.get('revenue_factor', 1.0)],
@@ -1765,12 +1814,13 @@ class SalesForecaster:
                         'peak_reason': [sf.get('peak_reason', '')]
                     })
                     
-                    # Kết hợp lịch sử + ngày cần dự báo
+                    # Kết hợp lịch sử (đã cập nhật với dự báo trước) + ngày cần dự báo
                     combined = pd.concat([product_history, future_row], ignore_index=True)
                     combined['ngay'] = pd.to_datetime(combined['ngay'])
+                    combined = combined.sort_values('ngay').reset_index(drop=True)
                     
-                    # Tạo features
-                    combined_features = self.create_features(combined)
+                    # Tạo features với prediction_mode=True (chỉ dùng lag >= 7)
+                    combined_features = self.create_features(combined, prediction_mode=True)
                     
                     # Lấy row cho ngày cần dự báo
                     pred_row = combined_features[combined_features['ngay'] == future_date]
@@ -1787,6 +1837,9 @@ class SalesForecaster:
                     # Dự báo với Model 1 (Quantity) - clip để không âm
                     quantity_pred = max(0, self.models['product_quantity'].predict(X_pred)[0])
                     
+                    # Lưu giá trị dự báo để dùng cho ngày tiếp theo (recursive)
+                    predicted_values[future_date] = quantity_pred
+                    
                     forecasts.append({
                         'forecast_date': future_date.date(),
                         'chi_nhanh': branch,
@@ -1795,9 +1848,9 @@ class SalesForecaster:
                         'nhom_hang_cap_1': cat1,
                         'nhom_hang_cap_2': cat2,
                         'abc_class': product_abc_map.get(product, 'Unknown'),
-                        'predicted_quantity': round(quantity_pred),  # Đã clip >= 0 ở trên
+                        'predicted_quantity': round(quantity_pred),
                         'predicted_quantity_raw': float(quantity_pred),
-                        'predicted_profit_margin': None,  # Model removed - set to NULL
+                        'predicted_profit_margin': None,
                         'confidence_lower': quantity_pred * 0.8,
                         'confidence_upper': quantity_pred * 1.2,
                         'created_at': datetime.now()
