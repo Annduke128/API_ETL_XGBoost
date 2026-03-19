@@ -653,8 +653,19 @@ Data Loading          Validation           Feature Engineering
 ┌──────────┐      ┌──────────────┐      ┌──────────┐     │
 │ Model 1  │      │   Model 2    │      │  Optuna  │◄────┘
 │ Product  │      │  Category    │      │  Tuning  │
-│  MdAPE   │      │   MAPE       │      │          │
+│  MdAPE   │      │   MAPE       │      │Log+ MSE  │
 └──────────┘      └──────────────┘      └──────────┘
+     │                    │
+     └────────────────────┘
+            │
+            ▼
+┌──────────────────────────┐
+│  Multi-View Evaluation   │
+│  • MAE  (units)          │
+│  • MdAPE (%)  (Model 1)  │
+│  • MAPE (%)   (Model 2)  │
+│  • RMSE (units)          │
+└──────────────────────────┘
      │                    │
      └────────────────────┘
                 │
@@ -687,6 +698,46 @@ Data Loading          Validation           Feature Engineering
 | Feature | Lag features | >= 1 | Stop |
 | Train | Valid targets | > 0 | Stop |
 | Predict | Forecast count | > 0 | Alert |
+
+### Chiến lược đánh giá Đa góc nhìn (Multi-View Evaluation)
+
+Hệ thống ML sử dụng **3 metrics chính** để đánh giá toàn diện chất lượng dự báo:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ĐA GÓC NHÌN METRICS                      │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  📏 MAE (Mean Absolute Error)                               │
+│     → Trung bình mỗi ngày kho bị dư/thiếu bao nhiêu đơn vị │
+│     → Đơn vị: sản phẩm                                      │
+│                                                             │
+│  📈 MdAPE (Median Absolute Percentage Error)               │
+│     → 50% ngày có sai số dưới ngưỡng này                   │
+│     → Phát hiện ngày bị sai số đột biến                     │
+│     → Model 1 (Product): Primary metric                    │
+│                                                             │
+│  📊 MAPE (Mean Absolute Percentage Error)                  │
+│     → Sai số % trung bình                                  │
+│     → Model 2 (Category): Primary metric                   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Chiến lược training:**
+- **Unified**: Chỉ dùng Optuna tuning (đã xóa train_model không tuning)
+- **Model 1 (Product)**: Tối ưu MdAPE - robust với outliers
+- **Model 2 (Category)**: Tối ưu MAPE - đánh giá tổng thể
+- **Đánh giá**: Log đầy đủ MAE, MdAPE, MAPE để có cái nhìn đa chiều
+
+**Ví dụ output:**
+```python
+📊 Validation Metrics:
+   📏 MAE:   12.35      ← Trung bình mỗi ngày kho bị dư/thiếu (đơn vị)
+   📈 MAPE:  15.73%     ← Sai số % trung bình
+   📉 MdAPE: 6.21%      ← 50% ngày sai số dưới ngưỡng này
+   📐 RMSE:  18.90
+```
 
 ---
 
@@ -722,7 +773,7 @@ Tự động gửi email cho các sự kiện:
 - Data quality alerts (cold start, missing data, zero predictions)
 
 **Nội dung email training report:**
-- Model performance metrics (MdAPE, MAPE)
+- Model performance metrics (MAE, MdAPE, MAPE)
 - Data quality indicators (cold start %, missing dates, zero predictions)
 - Feature importance top 5
 - Comparison giữa Model 1 và Model 2
@@ -756,7 +807,7 @@ Tự động gửi email cho các sự kiện:
 
 MIT License
 
-**Last Updated:** 2026-03-07
+**Last Updated:** 2026-03-18
 
 ---
 
@@ -771,23 +822,34 @@ MIT License
 | **Quy đổi ĐVT** | Hỗ trợ tỉ lệ quy đổi từ Excel (cột Quy đổi) | ✅ Hoàn thành |
 | **Price Fix** | Fix giá sản phẩm = 0 trong transaction_details | ✅ Hoàn thành |
 
-### 📦 Purchase Order Generation
+### 📦 Purchase Order Generation ⭐ Cập nhật Safety Stock
 
-Tạo đơn đặt hàng tự động với công thức:
+Tạo đơn đặt hàng tự động với **Tồn kho an toàn (Safety Stock)**:
 
+**Công thức Safety Stock:**
 ```
-Cần nhập = MAX(Dự báo 7 ngày, Tồn nhỏ nhất) - Tồn kho hiện tại
+Safety Stock = (Nhu cầu cao nhất × Lead time max) - (Nhu cầu TB × Lead time TB)
+```
+
+**Công thức Lượng cần nhập (cập nhật):**
+```
+Lượng cần nhập = MAX(Dự báo 7 ngày, Tồn kho tối ưu + Safety Stock) - Tồn kho hiện tại
 Đơn đặt hàng = ROUND_UP(Cần nhập / Quy đổi) × Quy đổi
 ```
 
-**Ví dụ:**
-- Cần nhập: 115 cái
-- Quy đổi: 50 (lốc 50 cái)
-- Đơn đặt hàng: 150 cái (3 lốc)
+**Tham số:**
+| Tham số | Mặc định | Mô tả |
+|---------|----------|-------|
+| `lead_time_max` | 7 ngày | Lead time tối đa |
+| `lead_time_avg` | 5 ngày | Lead time trung bình |
 
 **Cách sử dụng:**
 ```bash
+# Với lead time mặc định
 python ml_pipeline/xgboost_forecast.py --mode po --top-n 50
+
+# Hoặc trong Python
+forecaster.generate_purchase_order_csv(lead_time_max=10, lead_time_avg=6)
 ```
 
 ### 📊 Inventory Import trực tiếp ClickHouse
@@ -807,4 +869,35 @@ def process_inventory_pyspark(spark):
 |-------|-----|----------|
 | annduke/hasu-spark-etl | real-final-v18 | Thêm inventory import, quy_doi column |
 | annduke/hasu-ml-pipeline | latest | Thêm purchase order generation |
+
+---
+
+## 🆕 Cập nhật (2026-03-18)
+
+### 🤖 ML Pipeline Refactoring ⭐
+
+**Đơn giản hóa ML pipeline** - Loại bỏ complexity, tập trung vào chính xác.
+
+**Thay đổi chính:**
+
+| | Trước | Sau |
+|---|---|---|
+| **Training functions** | `train_model()` + `train_model_optuna()` | Chỉ `train_model_optuna()` |
+| **Tuning** | Optional (`use_tuning=True/False`) | Luôn tuning |
+| **Model 1 (Product)** | MdAPE primary | **MdAPE** primary (robust với outliers) |
+| **Model 2 (Category)** | MAPE primary | **MAPE** primary (đánh giá tổng thể) |
+
+**Chiến lược tối ưu:**
+
+| Model | Primary Metric | Mục đích |
+|-------|---------------|----------|
+| **Model 1 (Product)** | MdAPE | Robust với outliers của từng sản phẩm |
+| **Model 2 (Category)** | MAPE | Đánh giá tổng thể category trend |
+
+**Code changes:**
+- `xgboost_forecast.py`: Xóa `train_model()` không tuning, chỉ giữ `train_model_optuna()`
+- `train_all_models()`: Bỏ parameter `use_tuning`, luôn dùng Optuna
+- Cập nhật callers: `train_models.py`, `xgboost_forecast.py` main block
+
+**Last Updated:** 2026-03-18
 

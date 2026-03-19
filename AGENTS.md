@@ -486,7 +486,7 @@ git push origin main
 
 ```
 Training Data Requirements:
-├── Minimum: 14 days (for product-level training)
+├── Minimum: 2 days (technical minimum for lag_1)
 ├── Recommended: 31+ days (lag_1, lag_7, lag_14, lag_30)
 └── Optimal: 90+ days (full features + stable rolling stats)
 ```
@@ -531,7 +531,7 @@ else:
 
 | Mức độ dữ liệu | Số ngày | Phương pháp | Độ tin cậy |
 |----------------|---------|-------------|------------|
-| Cold start | < 7 | Category median (Model 2) | LOW |
+| Cold start | < 2 | Category median (Model 2) | LOW |
 | Warm up | 2-14 | Model với limited lags | MEDIUM |
 | Stable | 14-30 | Full model features | HIGH |
 | Mature | > 30 | Full model + all lags | HIGH |
@@ -769,12 +769,15 @@ docker build -t hasu-spark-etl:latest .
    ├── Seasonal: is_peak_day, seasonal_factor
    └── Categorical encoding: branch, category, brand
 
-4. TRAINING (train_all_models)
-   ├── Model 1: Product-level (MdAPE metric)
-   │   └── Target: daily_quantity
-   ├── Model 2: Category-level (MAPE metric)
-   │   └── Target: aggregated category quantity
+4. TRAINING (train_all_models) - Luôn dùng Optuna tuning
+   ├── Model 1: Product-level (MdAPE primary)
+   │   ├── Target: daily_quantity
+   │   └── Metrics: MAE, MdAPE, MAPE (validation)
+   ├── Model 2: Category-level (MAPE primary)
+   │   ├── Target: aggregated category quantity
+   │   └── Metrics: MAE, MdAPE, MAPE (validation)
    └── Hyperparameter tuning: Optuna (default 50 trials)
+       └── Objective: MdAPE (Model 1) / MAPE (Model 2)
 
 5. PREDICTION (predict_next_week)
    ├── Select products (default: Top 50 ABC)
@@ -797,17 +800,74 @@ docker build -t hasu-spark-etl:latest .
 
 **Important Notes:**
 - Lag features use pandas shift() grouped by (branch, product)
-- Cold start threshold: < 7 days of history (use category-level Model 2)
-- Product-level training requires >= 7 days of data
+- Cold start threshold: < 2 days of history (use category-level Model 2)
+- Product-level training: ALL products (no minimum day filter)
 - Always validate data quality before training
 
+### ML Metrics - Chiến lược đa góc nhìn
+
+Hệ thống sử dụng **3 metrics** để đánh giá toàn diện:
+
+| Metric | Công thức | Ý nghĩa | Khi nào dùng |
+|--------|-----------|---------|--------------|
+| **MAE** | mean(\|actual - predicted\|) | Trung bình dư/thiếu mỗi ngày (đơn vị) | Biết chính xác kho bị thiếu bao nhiêu |
+| **MdAPE** | median(\|error/actual\|) × 100% | 50% ngày sai số dưới ngưỡng này | Phát hiện ngày sai số đột biến (Model 1) |
+| **MAPE** | mean(\|error/actual\|) × 100% | Sai số % trung bình | Đánh giá tổng thể (Model 2) |
+
+**Chiến lược tối ưu:**
+- **Model 1 (Product)**: Tối ưu MdAPE (robust với outliers của từng sản phẩm)
+- **Model 2 (Category)**: Tối ưu MAPE (đánh giá tổng thể category)
+- **Validation**: Log đầy đủ MAE, MdAPE, MAPE để có cái nhìn đa chiều
+
+**Ví dụ output:**
+```
+📊 Validation Metrics:
+   📏 MAE:   12.35      ← Trung bình mỗi ngày kho bị dư/thiếu (đơn vị)
+   📈 MAPE:  15.73%     ← Sai số % trung bình
+   📉 MdAPE: 6.21%      ← 50% ngày sai số dưới ngưỡng này
+   📐 RMSE:  18.90
+```
+
 ---
 
-**Last Updated**: 2026-03-07 (Added ML workflow documentation)
+**Last Updated**: 2026-03-18 (Refactored: removed train_model without tuning, unified to Optuna only; MdAPE for Model 1, MAPE for Model 2)
 
 ---
 
-## 🆕 Cập nhật mới nhất (2026-03-16)
+## 🆕 Cập nhật mới nhất (2026-03-18)
+
+### 1. ML Pipeline Refactoring - Unified Optuna Training ⭐
+
+**Thay đổi:** Đơn giản hóa ML pipeline bằng cách **loại bỏ `train_model()` không tuning**, chỉ giữ `train_model_optuna()`
+
+**Lý do:**
+- Đảm bảo tính nhất quán: Luôn dùng hyperparameter tuning
+- Giảm complexity: Không cần maintain 2 code paths
+- Chính xác hơn: Optuna tìm được params tốt hơn default
+
+**Thay đổi chi tiết:**
+```python
+# ❌ CŨ: 2 hàm training
+- train_model()           # Default params, no tuning
+- train_model_optuna()    # Bayesian optimization
+
+# ✅ MỚI: Chỉ 1 hàm
+train_model_optuna()      # Luôn tuning, fallback giảm n_trials khi ít data
+```
+
+**Metric Strategy:**
+| Model | Primary Metric | Mục đích |
+|-------|---------------|----------|
+| Model 1 (Product) | **MdAPE** | Robust với outliers của từng sản phẩm |
+| Model 2 (Category) | **MAPE** | Đánh giá tổng thể category trend |
+
+**Breaking Changes:**
+- `train_all_models(use_tuning=True/False)` → Bỏ parameter, luôn tuning
+- `train_all_models(tuning_method='optuna')` → Giữ lại để chọn method
+
+---
+
+## 🗂️ Cập nhật trước (2026-03-16)
 
 ### 1. Inventory Import trực tiếp ClickHouse
 
@@ -832,19 +892,53 @@ docker build -t hasu-spark-etl:latest .
 | 16000109-1 | Cốc giấy đỏ | 50 | Lốc 50 cái |
 | 16000109-2 | Cốc giấy đỏ | 1200 | Thùng 1200 cái |
 
-### 3. Purchase Order Generation
+### 3. Purchase Order Generation ⭐ CẬP NHẬT 2026-03-18
 
-**Thay đổi:** Thêm hàm `generate_purchase_order_csv()` trong `xgboost_forecast.py`
+**Thay đổi:** Cập nhật hàm `generate_purchase_order_csv()` với **Safety Stock**
 
-**Logic:**
+**Công thức Tồn kho an toàn (Safety Stock):**
 ```
-Cần nhập = MAX(Dự báo 7 ngày, Tồn nhỏ nhất) - Tồn kho hiện tại
-Đơn đặt hàng = ROUND_UP(Cần nhập / quy_doi) × quy_doi
+Safety Stock = (Nhu cầu cao nhất × Lead time max) - (Nhu cầu TB × Lead time TB)
+
+Trong đó:
+- Nhu cầu cao nhất: Max daily demand (28 ngày gần nhất)
+- Nhu cầu TB: Average daily demand (28 ngày gần nhất)
+- Lead time max: Thờigian giao hàng tối đa (mặc định: 7 ngày)
+- Lead time TB: Thờigian giao hàng trung bình (mặc định: 5 ngày)
 ```
 
-**Ví dụ:**
-- Dự báo: 125 cái, Tồn kho: 10 cái → Cần nhập: 115 cái
-- Quy đổi: 50 (lốc) → Đặt: 150 cái (3 lốc)
+**Công thức Lượng cần nhập (cập nhật):**
+```
+Lượng cần nhập = MAX(Dự báo 7 ngày, Tồn kho tối ưu + Safety Stock) - Tồn kho hiện tại
+
+Trong đó:
+- Tồn kho tối ưu = median(lượng bán tuần + tồn nhỏ nhất × 0.75) qua 4 tuần
+- Safety Stock = (Nhu cầu max × Lead time max) - (Nhu cầu TB × Lead time TB)
+```
+
+**Tham số:**
+| Tham số | Mặc định | Mô tả |
+|---------|----------|-------|
+| `lead_time_max` | 7 | Lead time tối đa (ngày) |
+| `lead_time_avg` | 5 | Lead time trung bình (ngày) |
+| `top_n` | 50 | Số sản phẩm cần đặt |
+
+**Ví dụ sử dụng:**
+```python
+# Với lead time mặc định
+forecaster.generate_purchase_order_csv()
+
+# Với lead time tùy chỉnh
+forecaster.generate_purchase_order_csv(lead_time_max=10, lead_time_avg=6)
+```
+
+**Output CSV - Các cột mới:**
+| Cột | Mô tả |
+|-----|-------|
+| `ton_an_toan` | Tồn kho an toàn (Safety Stock) |
+| `tong_muc_tieu` | Tổng mục tiêu = Tối ưu + An toàn |
+| `ton_kho_toi_uu` | Tồn kho tối ưu (công thức cũ) |
+| `luong_can_nhap` | Lượng cần nhập (theo công thức mới) |
 
 ### 4. Docker Images mới
 
@@ -933,4 +1027,140 @@ CREATE TABLE IF NOT EXISTS ml_forecasts (
 
 ---
 
-**Last Updated**: 2026-03-16 (Added ML pipeline troubleshooting & fixes)
+## 🆕 Cập nhật mới nhất (2026-03-18)
+
+### 6. ML Pipeline - Bổ sung WMAPE Metric ⭐
+
+**Thay đổi:** Thêm chỉ số **WMAPE (Weighted Mean Absolute Percentage Error)** vào hệ thống đánh giá model
+
+**Chiến lược đa góc nhìn:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│           CHIẾN LƯỢC ĐÁNH GIÁ ĐA GÓC NHÌN                  │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. Tối ưu (Optuna Objective)                               │
+│     └── Log-Transform + MSE                                 │
+│         → Hội tụ mượt mà, tự động khắc phục outliers        │
+│                                                             │
+│  2. Đánh giá (Validation/Reporting)                         │
+│     └── In cả 3 chỉ số:                                     │
+│         ├── MAE    → Trung bình dư/thiếu (đơn vị)          │
+│         ├── WMAPE  → Sai số % tổng thể (an toàn nhất)      │
+│         └── MdAPE  → 50% ngày sai số dưới ngưỡng này       │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Các chỉ số được tính:**
+
+| Metric | Công thức | Ý nghĩa | Ngưỡng tốt |
+|--------|-----------|---------|------------|
+| **MAE** | mean(\|y - ŷ\|) | Trung bình mỗi ngày kho bị dư/thiếu bao nhiêu đơn vị | < 15 |
+| **WMAPE** | Σ\|y - ŷ\| / Σy × 100% | Sai số phần trăm tổng thể, không bị outliers ảnh hưởng | < 20% |
+| **MdAPE** | median(\|y - ŷ\|/y) × 100% | 50% ngày có sai số dưới ngưỡng này | < 15% |
+| **MAPE** | mean(\|y - ŷ\|/y) × 100% | Tham khảo (có thể bị outliers ảnh hưởng) | < 20% |
+
+**Code changes:**
+- `xgboost_forecast.py`: Thêm hàm `weighted_mean_absolute_percentage_error()`
+- `train_model()`: Tính cả 4 metrics (MAE, WMAPE, MdAPE, MAPE) trong CV
+- `train_model_optuna()`: Log cả 3 chỉ số chính sau validation
+- `train_all_models()`: Training summary hiển thị đầy đủ metrics
+
+**Ví dụ output mới:**
+```python
+📊 VALIDATION METRICS (3 chỉ số đa góc nhìn):
+   📏 MAE:    12.3456    ← Trung bình mỗi ngày kho bị dư/thiếu (đơn vị)
+   📊 WMAPE:  8.52%      ← Sai số phần trăm tổng thể (an toàn nhất)
+   📈 MdAPE:  6.21%      ← 50% ngày sai số dưới ngưỡng này
+   📉 MAPE:   15.73%     ← Tham khảo (có thể bị outliers ảnh hưởng)
+   📉 RMSE:   18.9012    ← Sai số bình phương trung bình
+   
+💡 Giải thích:
+   → MAE: Dự báo sai bao nhiêu đơn vị mỗi ngày
+   → WMAPE: Sai số % tổng thể, dùng cho inventory planning
+   → MdAPE: 50% ngày có sai số dưới 6.21%
+```
+
+> ⚠️ **UPDATE 2026-03-18**: WMAPE đã bị **loại bỏ** và `train_model()` (không tuning) cũng bị xóa. 
+> Xem [ML Pipeline Refactoring](#1-ml-pipeline-refactoring---unified-optuna-training-) ở trên.
+
+---
+
+### 7. Purchase Order - Safety Stock ⭐ MỚI
+
+**Thay đổi:** Cập nhật `generate_purchase_order_csv()` với **Tồn kho an toàn (Safety Stock)**
+
+**Công thức Safety Stock:**
+```
+Safety Stock = (Nhu cầu cao nhất × Lead time max) - (Nhu cầu TB × Lead time TB)
+
+Trong đó:
+- Nhu cầu cao nhất: Max daily demand (28 ngày gần nhất)
+- Nhu cầu TB: Average daily demand (28 ngày gần nhất)
+- Lead time max: Thờigian giao hàng tối đa (mặc định: 7 ngày)
+- Lead time TB: Thờigian giao hàng trung bình (mặc định: 5 ngày)
+```
+
+**Công thức Lượng cần nhập (cập nhật):**
+```
+Lượng cần nhập = MAX(Dự báo 7 ngày, Tồn kho tối ưu + Safety Stock) - Tồn kho hiện tại
+```
+
+**Tham số:**
+| Tham số | Mặc định | Mô tả |
+|---------|----------|-------|
+| `lead_time_max` | 7 | Lead time tối đa (ngày) |
+| `lead_time_avg` | 5 | Lead time trung bình (ngày) |
+
+**Ví dụ sử dụng:**
+```python
+# Với lead time mặc định (7 và 5 ngày)
+forecaster.generate_purchase_order_csv()
+
+# Với lead time tùy chỉnh (10 và 6 ngày)
+forecaster.generate_purchase_order_csv(lead_time_max=10, lead_time_avg=6)
+```
+
+**Output CSV - Các cột mới:**
+- `ton_an_toan`: Tồn kho an toàn (Safety Stock)
+- `tong_muc_tieu`: Tổng mục tiêu = Tối ưu + An toàn
+- `luong_can_nhap`: Lượng cần nhập (theo công thức mới)
+
+---
+
+### 8. Fix Query "Bán Tuần Trước" - ISO Week ⭐
+
+**Thay đổi:** Query dữ liệu bán tuần trước theo **ISO Week** thay vì ngày
+
+**Vấn đề cũ:**
+- Dùng `today() - 14` đến `today() - 7` để lấy tuần trước
+- Nếu dữ liệu chậm hoặc hôm nay là giữa tuần → lấy sai dữ liệu
+
+**Giải pháp mới:**
+```sql
+-- Lấy tuần hiện tại từ dữ liệu
+SELECT 
+    toWeek(MAX(transaction_date)) as current_week,
+    toYear(MAX(transaction_date)) as current_year
+FROM retail_dw.fct_regular_sales
+
+-- Query tuần trước (đầy đủ từ thứ 2 đến chủ nhật)
+SELECT 
+    f.product_code as ma_hang,
+    SUM(f.quantity_sold) as last_week_sales
+FROM retail_dw.fct_regular_sales f
+WHERE f.product_code IN ('...')
+  AND toYear(f.transaction_date) = {last_year}
+  AND toWeek(f.transaction_date) = {last_week}
+GROUP BY f.product_code
+```
+
+**Xử lý đặc biệt:**
+- Tuần 1 năm mới → Tuần 52 năm trước
+- Luôn lấy đủ 7 ngày (thứ 2 đến chủ nhật) của tuần trước
+
+---
+
+**Last Updated**: 2026-03-18 (Refactored ML Pipeline: removed train_model without tuning, unified to Optuna only; MdAPE for Model 1, MAPE for Model 2)

@@ -10,10 +10,11 @@
         dbt-deps dbt-seed dbt-list dbt-list-staging dbt-list-marts dbt-list-sources dbt-list-all \
         dbt-preview dbt-show-source dbt-show-model dbt-validate dbt-test-model dbt-compile \
         ml ml-train ml-predict ml-all ml-fast ml-optimal ml-report \
-        pipeline-full pipeline-quick app app-legacy \
+        pipeline-full pipeline-quick app app-legacy app-k3s \
         smart-pipeline smart-pipeline-with-sync smart-process smart-dry-run \
         use-k3s use-docker \
         k8s-deploy k8s-deploy-all k8s-update k8s-status k8s-logs k8s-delete \
+        k3s-ml-train-gpu k3s-gpu-status k3s-ml-gpu-logs k3s-gpu-test install-gpu-plugin build-push-gpu \
         format lint check
 
 PYTHON := python3
@@ -47,7 +48,7 @@ help:
 	@echo "║                                                                  ║"
 	@echo "║  ML PIPELINE                                                     ║"
 	@echo "║    make ml              - Train ML models                        ║"
-	@echo "║    make ml-fast         - Train without tuning                   ║"
+	@echo "║    make ml-fast         - Train quick (10 trials)                ║"
 	@echo "║    make ml-optimal      - Train with 100 trials                  ║"
 	@echo "║    make ml-all          - Train + Predict + Report               ║"
 	@echo "║    make ml-predict      - Generate predictions only              ║"
@@ -60,22 +61,27 @@ help:
 	@echo "║    make check           - Run all checks                         ║"
 	@echo "║                                                                  ║"
 	@echo "║  KUBERNETES / K3S                                                ║"
-	@echo "║    make app-k3s         - 🚀 Run FULL pipeline on K3s            ║"
+	@echo "║    make app-k3s         - 🎮 Run FULL pipeline on K3s (GPU)      ║"
 	@echo "║    make build-push-k3s  - 🐳 Build & push images (DOCKERHUB_)    ║"
 	@echo "║    make k3s-spark       - ⚡ Spark Full Pipeline (Interactive)   ║"
 	@echo "║    make k3s-spark-etl   - ⚡ Spark ETL Job only                  ║"
 	@echo "║    make k3s-csv         - Process CSV files on K3s               ║"
 	@echo "║    make k3s-sync        - Run Sync job on K3s                    ║"
 	@echo "║    make k3s-dbt         - Run DBT build on K3s                   ║"
-	@echo "║    make k3s-ml-train    - Run ML training on K3s                 ║"
+	@echo "║    make k3s-ml-train    - Run ML training on K3s (CPU)           ║"
+	@echo "║    make k3s-ml-train-gpu- 🤖 Run ML training on K3s (GPU)        ║"
 	@echo "║    make k3s-ml-predict  - Run ML predictions on K3s              ║"
 	@echo "║    make spark-deploy    - Deploy Spark cluster                   ║"
 	@echo "║    make k8s-deploy-all  - Deploy all K3s resources               ║"
 	@echo "║    make k8s-status      - Check K3s status                       ║"
+	@echo "║    make k8s-logs        - 📜 Xem logs tất cả jobs                ║"
+	@echo "║    make k8s-logs-train  - 📜 Xem logs ML training                ║"
+	@echo "║    make k8s-logs-predict- 📜 Xem logs ML predict                 ║"
 	@echo "║                                                                  ║"
 	@echo "║  🚀 ONE-SHOT COMMANDS (Recommended)                               ║"
-	@echo "║    make app             - 🧠 Smart full pipeline (auto-detect)   ║"
+	@echo "║    make app             - 🧠 Smart full pipeline (Docker/local)  ║"
 	@echo "║    make app-legacy      - 📁 Legacy full pipeline (manual CSV)   ║"
+	@echo "║    make app-k3s         - 🎮 Full pipeline on K3s (GPU)          ║"
 	@echo "║                                                                  ║"
 	@echo "║  📊 PIPELINE MONITOR (Log chi tiết)                              ║"
 	@echo "║    make monitor         - Hiển thị tất cả stages                 ║"
@@ -249,8 +255,8 @@ ml-train:
 	$(call ml-cmd,train_models.py --trials 50)
 
 ml-fast:
-	@echo "⚡ Training ML models (no tuning)..."
-	$(call ml-cmd,train_models.py --no-tuning)
+	@echo "⚡ Training ML models (quick - 10 trials)..."
+	$(call ml-cmd,train_models.py --trials 10)
 
 ml-optimal:
 	@echo "🎯 Training ML models (100 trials)..."
@@ -532,8 +538,28 @@ k8s-status: kubectl-check
 	$(KUBECTL_CMD) get pods -n $(NAMESPACE)
 
 k8s-logs: kubectl-check
-	@echo "📜 Recent logs from all pods..."
-	$(KUBECTL_CMD) logs --tail=50 -n $(NAMESPACE) -l app=ml-pipeline 2>/dev/null || echo "No ml-pipeline pods found"
+	@echo "📜 Viewing logs from all jobs..."
+	./k8s/scripts/view_all_logs.sh -n $(NAMESPACE)
+
+k8s-logs-follow: kubectl-check
+	@echo "📜 Following logs from latest job..."
+	./k8s/scripts/view_all_logs.sh -n $(NAMESPACE) --last -f
+
+k8s-logs-train: kubectl-check
+	@echo "📜 Viewing ML training logs..."
+	./k8s/scripts/view_all_logs.sh -n $(NAMESPACE) -j ml-train
+
+k8s-logs-predict: kubectl-check
+	@echo "📜 Viewing ML predict logs..."
+	./k8s/scripts/view_all_logs.sh -n $(NAMESPACE) -j ml-predict
+
+k8s-logs-etl: kubectl-check
+	@echo "📜 Viewing ETL logs..."
+	./k8s/scripts/view_all_logs.sh -n $(NAMESPACE) -j spark-etl
+
+k8s-logs-dbt: kubectl-check
+	@echo "📜 Viewing DBT logs..."
+	./k8s/scripts/view_all_logs.sh -n $(NAMESPACE) -j dbt-build
 
 k8s-delete: kubectl-check
 	@echo "⚠️  WARNING: This will delete all resources in namespace $(NAMESPACE)"
@@ -550,12 +576,17 @@ app-k3s: kubectl-check
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════════╗"
 	@echo "║           🚀 Running Full Pipeline on K3s Cluster                    ║"
-	@echo "║           Using Spark Hybrid Architecture                            ║"
+	@echo "║           Using Spark Hybrid Architecture + GPU                      ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "Pipeline: Spark ETL → Python UDFs → DBT → ML Training → Predictions"
+	@echo "Pipeline: Spark ETL → Python UDFs → DBT → ML Training (GPU) → Predictions"
 	@echo ""
 	@read -p "Continue? (yes/no): " confirm && [ "$$confirm" = "yes" ] || (echo "Cancelled." && exit 1)
+	
+	@echo ""
+	@echo "📋 Checking GPU node..."
+	$(KUBECTL_CMD) get nodes -l nvidia.com/gpu.present=true --show-labels 2>/dev/null | grep -q "k3s-worker-gpu" || (echo "❌ GPU node not found! Run: make install-gpu-plugin" && exit 1)
+	@echo "✅ GPU node found: k3s-worker-gpu"
 	
 	@echo ""
 	@echo "📁 Step 0: Ensure Spark cluster is ready..."
@@ -572,7 +603,7 @@ app-k3s: kubectl-check
 	@echo "✅ Spark ETL complete!"
 	
 	@echo ""
-	@echo "🔄 Step 1.5: Sync PostgreSQL → ClickHouse"
+	@echo "🔄 Step 2: Sync PostgreSQL → ClickHouse"
 	-$(KUBECTL_CMD) delete job sync-data -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
 	@cat $(K8S_DIR)/05-ml-pipeline/job-sync.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
@@ -581,7 +612,7 @@ app-k3s: kubectl-check
 	@echo "✅ Sync complete!"
 	
 	@echo ""
-	@echo "🏗️ Step 2: DBT Build"
+	@echo "🏗️ Step 3: DBT Build"
 	-$(KUBECTL_CMD) delete job dbt-build -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
 	@cat $(K8S_DIR)/05-ml-pipeline/job-dbt-build.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
@@ -590,16 +621,16 @@ app-k3s: kubectl-check
 	@echo "✅ DBT build complete!"
 	
 	@echo ""
-	@echo "🤖 Step 3: ML Training"
-	-$(KUBECTL_CMD) delete job ml-train -n $(NAMESPACE) 2>/dev/null || true
+	@echo "🤖 Step 4: ML Training with GPU"
+	-$(KUBECTL_CMD) delete job ml-train-gpu -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
-	@echo "⏳ Waiting for training to complete (15-30 minutes)..."
-	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train -n $(NAMESPACE) --timeout=3600s
-	@echo "✅ ML training complete!"
+	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train-gpu.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
+	@echo "⏳ Waiting for GPU training to complete (faster with GPU)..."
+	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train-gpu -n $(NAMESPACE) --timeout=1800s
+	@echo "✅ GPU ML training complete!"
 	
 	@echo ""
-	@echo "🔮 Step 4: Generate Predictions"
+	@echo "🔮 Step 5: Generate Predictions"
 	-$(KUBECTL_CMD) delete job ml-predict -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
 	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-predict.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
@@ -609,13 +640,12 @@ app-k3s: kubectl-check
 	
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════════╗"
-	@echo "║           ✅ FULL PIPELINE COMPLETE ON K3s!                          ║"
+	@echo "║           ✅ FULL PIPELINE WITH GPU COMPLETE ON K3s!                 ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "Check results: make k3s-logs"
 
-# Individual pipeline steps on K3s
-k3s-csv: kubectl-check
+# Full pipeline on K3s with GPU for ML Training
 	@echo "📄 Running CSV Processing on K3s..."
 	-$(KUBECTL_CMD) delete job csv-process -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
@@ -782,6 +812,14 @@ spark-delete:
 # ============================================================================
 # GPU ML TRAINING
 # ============================================================================
+# 
+# Các lệnh GPU:
+#   make k3s-gpu-test        - Test GPU trong container
+#   make k3s-gpu-status      - Kiểm tra GPU status
+#   make k3s-ml-train-gpu    - Chạy ML training với GPU
+#   make k3s-ml-gpu-logs     - Xem logs GPU training
+#   make app-k3s-gpu         - Chạy toàn bộ pipeline với GPU
+#
 
 # Run ML training with GPU on K3s
 k3s-ml-train-gpu: kubectl-check
@@ -791,12 +829,21 @@ k3s-ml-train-gpu: kubectl-check
 	@echo "║           Target: k3s-worker-gpu (RTX 3060)                          ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════╝"
 	@echo ""
+	@echo "📋 Checking GPU node..."
+	$(KUBECTL_CMD) get nodes -l nvidia.com/gpu.present=true --show-labels 2>/dev/null | grep -q "k3s-worker-gpu" || (echo "❌ GPU node not found!" && exit 1)
+	@echo "✅ GPU node found"
+	@echo ""
 	-$(KUBECTL_CMD) delete job ml-train-gpu -n $(NAMESPACE) 2>/dev/null || true
 	@sleep 2
 	@cat $(K8S_DIR)/05-ml-pipeline/job-ml-train-gpu.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f - -n $(NAMESPACE)
-	@echo "⏳ Waiting for GPU training to complete..."
-	$(KUBECTL_CMD) wait --for=condition=complete job/ml-train-gpu -n $(NAMESPACE) --timeout=3600s
-	@echo "✅ GPU Training complete!"
+	@echo ""
+	@echo "⏳ Waiting for GPU training to start..."
+	@sleep 5
+	@echo "📜 Streaming logs (Ctrl+C to stop watching, job will continue running):"
+	@echo ""
+	$(KUBECTL_CMD) logs -n $(NAMESPACE) job/ml-train-gpu -f 2>/dev/null || \
+		($(KUBECTL_CMD) wait --for=condition=complete job/ml-train-gpu -n $(NAMESPACE) --timeout=3600s && \
+		 echo "" && echo "✅ GPU Training complete!")
 
 # Install NVIDIA Device Plugin (run once)
 install-gpu-plugin: kubectl-check
@@ -808,11 +855,16 @@ k3s-gpu-status: kubectl-check
 	@echo "🎮 GPU Status"
 	@echo "============="
 	@echo ""
-	@echo "Nodes with GPU:"
-	@kubectl get nodes -o json | jq -r '.items[] | select(.status.capacity | has("nvidia.com/gpu")) | "  \(.metadata.name): \(.status.capacity."nvidia.com/gpu") GPUs"' 2>/dev/null || kubectl get nodes -o custom-columns=NAME:.metadata.name,GPU:.status.capacity.nvidia\.com/gpu
+	@echo "📊 Nodes with GPU:"
+	@$(KUBECTL_CMD) get nodes -o custom-columns=NAME:.metadata.name,GPU:.status.capacity.nvidia\.com/gpu,READY:.status.conditions[-1].type 2>/dev/null || \
+		echo "  (Cannot get GPU info)"
 	@echo ""
-	@echo "GPU Pods:"
-	@kubectl get pods --all-namespaces -o json | jq -r '.items[] | select(.spec.containers[].resources.limits | has("nvidia.com/gpu")) | "  \(.metadata.namespace)/\(.metadata.name)"' 2>/dev/null || echo "  (No GPU pods found)"
+	@echo "📋 GPU Labels on nodes:"
+	@$(KUBECTL_CMD) get nodes --show-labels | grep -o 'nvidia.com/gpu[^,]*' | sort -u || echo "  (No GPU labels found)"
+	@echo ""
+	@echo "🟢 GPU Pods (running):"
+	@$(KUBECTL_CMD) get pods --all-namespaces -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,GPU:.spec.containers[*].resources.limits.nvidia\.com/gpu,STATUS:.status.phase 2>/dev/null | grep -v "<none>" || \
+		echo "  (No GPU pods found)"
 
 # Build and push GPU image
 build-push-gpu: check-env

@@ -21,11 +21,6 @@ def main():
         description='Train XGBoost forecasting models với hyperparameter tuning'
     )
     parser.add_argument(
-        '--no-tuning', 
-        action='store_true',
-        help='Train without hyperparameter tuning (nhanh hơn)'
-    )
-    parser.add_argument(
         '--method',
         type=str,
         default='optuna',
@@ -73,11 +68,10 @@ def main():
         logger.info("=" * 60)
         
         metrics = forecaster.train_all_models(
-            use_tuning=not args.no_tuning,
-            tuning_method=args.method,
             n_trials=args.trials,
             days=args.days,
-            send_email=not args.no_email
+            send_email=not args.no_email,
+            tuning_method=args.method
         )
         
         # Generate forecasts nếu cần
