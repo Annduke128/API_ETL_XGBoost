@@ -13,7 +13,7 @@ spec:
       containers:
       - name: ml-train
         image: annduke/hasu-ml-pipeline:gpu-stable-v3
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         command: ["python", "train_models.py"]
         args: ["--trials", "50"]
         env:
