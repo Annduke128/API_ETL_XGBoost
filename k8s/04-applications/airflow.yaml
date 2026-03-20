@@ -56,6 +56,17 @@ spec:
             port: 8080
           initialDelaySeconds: 30
           periodSeconds: 10
+        volumeMounts:
+        - name: airflow-dags
+          mountPath: /opt/airflow/dags/retail_pipeline_dag.py
+          subPath: retail_pipeline_dag.py
+        - name: airflow-dags
+          mountPath: /opt/airflow/dags/csv_daily_import_dag.py
+          subPath: csv_daily_import_dag.py
+      volumes:
+      - name: airflow-dags
+        configMap:
+          name: airflow-dags
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -91,6 +102,17 @@ spec:
           limits:
             memory: "2Gi"
             cpu: "1000m"
+        volumeMounts:
+        - name: airflow-dags
+          mountPath: /opt/airflow/dags/retail_pipeline_dag.py
+          subPath: retail_pipeline_dag.py
+        - name: airflow-dags
+          mountPath: /opt/airflow/dags/csv_daily_import_dag.py
+          subPath: csv_daily_import_dag.py
+      volumes:
+      - name: airflow-dags
+        configMap:
+          name: airflow-dags
 ---
 apiVersion: v1
 kind: Service
