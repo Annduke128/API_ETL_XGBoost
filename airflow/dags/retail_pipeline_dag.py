@@ -1,19 +1,17 @@
 """
 Airflow DAG cho Retail Data Pipeline
-- Chạy hàng ngày
-- Xử lý dữ liệu từ CSV → PostgreSQL → ClickHouse
-- Chạy DBT models
-- Cập nhật ML models
+- csv_daily_import: CSV → PostgreSQL (hàng ngày)
+- retail_weekly_ml: Sync CH → DBT → Train ML (hàng tuần)
 """
 
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
-from airflow.providers.postgres.operators.postgres import PostgresOperator
-from airflow.sensors.filesystem import FileSensor
-from airflow.models import Variable
 import pendulum
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Default args
 default_args = {
@@ -26,83 +24,26 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
 }
 
-# DAG chính - Daily ETL
-dag = DAG(
-    'retail_daily_etl',
+# ============================================
+# DAG 1: Weekly ML Pipeline (Sync CH → DBT → Train)
+# ============================================
+ml_dag = DAG(
+    'retail_weekly_ml',
     default_args=default_args,
-    description='Daily ETL pipeline cho hệ thống bán lẻ',
-    schedule_interval='0 2 * * *',  # Chạy lúc 2h sáng mỗi ngày
+    description='Weekly: Sync CH → DBT → Train ML → Forecast',
+    schedule_interval='0 4 * * 0',  # Chạy lúc 4h sáng Chủ nhật
     start_date=pendulum.datetime(2024, 1, 1, tz="Asia/Ho_Chi_Minh"),
     catchup=False,
-    tags=['retail', 'etl', 'daily'],
+    tags=['retail', 'ml', 'weekly', 'dbt'],
 )
 
-# Task 1: Kiểm tra file CSV hoặc Excel mới
-wait_for_files = FileSensor(
-    task_id='wait_for_files',
-    filepath='/opt/airflow/csv_input/*.csv',  # FileSensor chỉ hỗ trợ 1 pattern
-    fs_conn_id='fs_default',
-    poke_interval=60,
-    timeout=600,
-    dag=dag,
-)
-
-# Task 2: Xử lý files (CSV và Excel) - clean và load vào PostgreSQL
-def process_data_files(**context):
-    """Xử lý các file CSV và Excel trong thư mục input"""
-    import os
+# Task 1: Sync PostgreSQL → ClickHouse
+def sync_pg_to_ch(**context):
+    """Đồng bộ dữ liệu từ PostgreSQL sang ClickHouse cho ML"""
     import sys
     sys.path.append('/opt/airflow/data_cleaning')
     
-    from data_processor import RetailDataCleaner
-    from db_connectors import PostgreSQLConnector
-    
-    input_dir = '/opt/airflow/csv_input'
-    processed_dir = '/opt/airflow/csv_processed'
-    os.makedirs(processed_dir, exist_ok=True)
-    
-    cleaner = RetailDataCleaner()
-    pg = PostgreSQLConnector(
-        host='postgres',
-        database='retail_db',
-        user='retail_user',
-        password='retail_password'
-    )
-    
-    processed_count = 0
-    supported_extensions = ('.csv', '.xlsx', '.xls')
-    
-    for filename in os.listdir(input_dir):
-        if filename.lower().endswith(supported_extensions):
-            file_path = os.path.join(input_dir, filename)
-            try:
-                # Clean data (tự động nhận diện định dạng)
-                df = cleaner.clean(file_path)
-                
-                # Insert vào PostgreSQL
-                pg.insert_transactions(df)
-                
-                # Move to processed
-                os.rename(file_path, os.path.join(processed_dir, filename))
-                processed_count += 1
-                
-            except Exception as e:
-                print(f"Error processing {filename}: {e}")
-                raise
-    
-    return f"Processed {processed_count} files"
-
-process_files = PythonOperator(
-    task_id='process_data_files',
-    python_callable=process_data_files,
-    dag=dag,
-)
-
-# Task 3: Sync từ PostgreSQL sang ClickHouse
-def sync_to_clickhouse(**context):
-    """Đồng bộ dữ liệu từ PostgreSQL sang ClickHouse"""
     from db_connectors import PostgreSQLConnector, ClickHouseConnector
-    from datetime import datetime, timedelta
     
     pg = PostgreSQLConnector(
         host='postgres',
@@ -118,9 +59,7 @@ def sync_to_clickhouse(**context):
         password='clickhouse_password'
     )
     
-    # Lấy dữ liệu hôm qua
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    
+    # Lấy dữ liệu 60 ngày gần nhất cho ML
     query = """
         SELECT 
             t.id, t.ma_giao_dich, t.thoi_gian,
@@ -129,10 +68,10 @@ def sync_to_clickhouse(**context):
             t.tong_gia_von, t.loi_nhuan_gop
         FROM transactions t
         JOIN branches b ON t.chi_nhanh_id = b.id
-        WHERE DATE(t.thoi_gian) = :date
+        WHERE t.thoi_gian >= CURRENT_DATE - INTERVAL '60 days'
     """
     
-    df = pg.execute_query(query, {'date': yesterday})
+    df = pg.execute_query(query)
     
     if len(df) > 0:
         ch.insert_dataframe('fact_transactions', df)
@@ -140,13 +79,13 @@ def sync_to_clickhouse(**context):
     
     return "No data to sync"
 
-sync_clickhouse = PythonOperator(
-    task_id='sync_to_clickhouse',
-    python_callable=sync_to_clickhouse,
-    dag=dag,
+sync_to_ch = PythonOperator(
+    task_id='sync_pg_to_clickhouse',
+    python_callable=sync_pg_to_ch,
+    dag=ml_dag,
 )
 
-# Task 4: Chạy DBT models
+# Task 2: Chạy DBT models (trên ClickHouse)
 dbt_run = BashOperator(
     task_id='dbt_run_models',
     bash_command='''
@@ -154,63 +93,20 @@ dbt_run = BashOperator(
         dbt deps && \
         dbt run --target prod --select tag:daily
     ''',
-    dag=dag,
+    dag=ml_dag,
 )
 
-# Task 5: Chạy DBT tests
+# Task 3: Chạy DBT tests
 dbt_test = BashOperator(
     task_id='dbt_run_tests',
     bash_command='''
         cd /opt/airflow/dbt_retail && \
         dbt test --target prod
     ''',
-    dag=dag,
+    dag=ml_dag,
 )
 
-# Task 6: Refresh Superset cache
-def refresh_superset_cache(**context):
-    """Refresh cache trong Superset"""
-    import requests
-    
-    try:
-        # Gọi API refresh cache (cần cấu hình thêm)
-        response = requests.post(
-            'http://superset-web:8088/api/v1/security/login',
-            json={
-                'username': 'admin',
-                'password': 'admin',
-                'provider': 'db'
-            }
-        )
-        print("Superset cache refresh triggered")
-        return "OK"
-    except Exception as e:
-        print(f"Warning: Could not refresh Superset cache: {e}")
-        return "Warning"
-
-refresh_cache = PythonOperator(
-    task_id='refresh_superset_cache',
-    python_callable=refresh_superset_cache,
-    dag=dag,
-)
-
-# Define dependencies
-wait_for_files >> process_files >> sync_clickhouse >> dbt_run >> dbt_test >> refresh_cache
-
-
-# ============================================
-# DAG 2: Weekly ML Pipeline
-# ============================================
-ml_dag = DAG(
-    'retail_weekly_ml',
-    default_args=default_args,
-    description='Weekly ML pipeline cho dự báo bán hàng',
-    schedule_interval='0 3 * * 0',  # Chạy lúc 3h sáng Chủ nhật
-    start_date=pendulum.datetime(2024, 1, 1, tz="Asia/Ho_Chi_Minh"),
-    catchup=False,
-    tags=['retail', 'ml', 'weekly'],
-)
-
+# Task 4: Train ML models
 def train_forecast_models(**context):
     """Train models dự báo"""
     import sys
@@ -229,6 +125,7 @@ train_models = PythonOperator(
     dag=ml_dag,
 )
 
+# Task 5: Generate forecasts
 def generate_forecasts(**context):
     """Generate forecasts cho tuần tới"""
     import sys
@@ -250,4 +147,31 @@ generate_predictions = PythonOperator(
     dag=ml_dag,
 )
 
-train_models >> generate_predictions
+# Task 6: Refresh Superset cache
+def refresh_superset_cache(**context):
+    """Refresh cache trong Superset"""
+    import requests
+    
+    try:
+        response = requests.post(
+            'http://superset-web:8088/api/v1/security/login',
+            json={
+                'username': 'admin',
+                'password': 'admin',
+                'provider': 'db'
+            }
+        )
+        logger.info("Superset cache refresh triggered")
+        return "OK"
+    except Exception as e:
+        logger.warning(f"Could not refresh Superset cache: {e}")
+        return "Warning"
+
+refresh_cache = PythonOperator(
+    task_id='refresh_superset_cache',
+    python_callable=refresh_superset_cache,
+    dag=ml_dag,
+)
+
+# DAG dependencies: Sync CH → DBT → Train → Forecast → Refresh
+sync_to_ch >> dbt_run >> dbt_test >> train_models >> generate_predictions >> refresh_cache
