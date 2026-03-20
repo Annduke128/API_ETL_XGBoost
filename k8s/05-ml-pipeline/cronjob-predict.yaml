@@ -20,7 +20,7 @@ spec:
           - name: dockerhub-credentials
           containers:
           - name: ml-predict
-            image: annduke/hasu-ml-pipeline:gpu-stable-v3
+            image: annduke/hasu-ml-pipeline:gpu-stable-v5
             imagePullPolicy: Always  # Always pull latest for auto-update
             command: ["python", "-c"]
             args:
