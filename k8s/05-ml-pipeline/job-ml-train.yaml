@@ -9,7 +9,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: ml
-        image: annduke/hasu-ml-pipeline:gpu-stable-v6
+        image: annduke/hasu-ml-pipeline:gpu-stable-v7
         imagePullPolicy: Always
         command: ["python", "train_models.py", "--trials", "30"]
         envFrom:

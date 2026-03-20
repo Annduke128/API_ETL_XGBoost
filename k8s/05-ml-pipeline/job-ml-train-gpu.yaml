@@ -12,7 +12,7 @@ spec:
         nvidia.com/gpu.present: "true"  # Chọn node có GPU
       containers:
       - name: ml-train
-        image: annduke/hasu-ml-pipeline:gpu-stable-v6
+        image: annduke/hasu-ml-pipeline:gpu-stable-v7
         imagePullPolicy: Always
         command: ["python", "train_models.py"]
         args: ["--trials", "50"]

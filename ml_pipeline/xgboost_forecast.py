@@ -2142,11 +2142,16 @@ class SalesForecaster:
                     
                     logger.info(f"   ✅ Đã sắp xếp: 1) Bán tuần trước (cao→thấp) 2) Tồn kho nhỏ nhất (thấp→cao)")
                     
-                    # Log top 10 sau khi sắp xếp
-                    top_10 = forecasts.head(10)[['ma_hang', 'ten_san_pham', 'last_week_sales', 'ton_kho_nho_nhat', 'abc_class']]
+                    # Log top 10 unique products sau khi sắp xếp (forecasts có nhiều dòng cho cùng 1 product)
+                    unique_products = forecasts.drop_duplicates(subset=['ma_hang']).head(10)
                     logger.info(f"   📋 Top 10 sản phẩm sau sắp xếp:")
-                    for idx, row in top_10.iterrows():
+                    for idx, row in unique_products.iterrows():
                         logger.info(f"      {row['ma_hang']} | {row['ten_san_pham'][:25]:<25} | Bán T-{row['last_week_sales']:>4.0f} | Tồn {row['ton_kho_nho_nhat']:>4.0f} | {row['abc_class']}")
+                    
+                    # Thống kê số sản phẩm có last_week_sales > 0
+                    n_with_sales = (forecasts.drop_duplicates(subset=['ma_hang'])['last_week_sales'] > 0).sum()
+                    n_total = forecasts['ma_hang'].nunique()
+                    logger.info(f"   📊 Thống kê: {n_with_sales}/{n_total} sản phẩm có bán tuần trước > 0")
                     
                 except Exception as e:
                     logger.warning(f"⚠️ Lỗi khi áp dụng logic lọc/sắp xếp: {e}")
