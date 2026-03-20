@@ -622,10 +622,13 @@ class EmailNotifier:
             # Chuẩn bị dữ liệu
             product_data = []
             
-            # Group by product
-            grouped = forecasts.groupby('ma_hang')
+            # Lấy unique products theo thứ tự đã sắp xếp (không dùng groupby để tránh sắp xếp lại)
+            unique_products = forecasts.drop_duplicates(subset=['ma_hang'], keep='first')
             
-            for product_code, group in grouped:
+            for _, row in unique_products.iterrows():
+                product_code = row['ma_hang']
+                # Lấy tất cả records của product này để tính sum
+                group = forecasts[forecasts['ma_hang'] == product_code]
                 # Lấy thông tin cơ bản
                 name = str(group['ten_san_pham'].iloc[0] if 'ten_san_pham' in group.columns else '')
                 category = str(group['nhom_hang_cap_1'].iloc[0]) if 'nhom_hang_cap_1' in group.columns else ''
