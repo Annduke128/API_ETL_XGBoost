@@ -65,7 +65,8 @@ Hasu_ML_k3s/
 │
 ├── 📁 airflow/                   # Airflow DAGs
 │   └── dags/
-│       └── retail_pipeline_dag.py
+│       ├── csv_daily_import_dag.py      # Daily CSV → PostgreSQL
+│       └── retail_pipeline_dag.py       # Weekly: Sync CH → DBT → ML
 │
 ├── 📁 csv_input/                 # CSV files (gitignored)
 ├── 📁 csv_output/                # Processed output
@@ -198,6 +199,41 @@ Developer → Push to main → GitHub Actions → Build Images
                                               ↓
                                     Pull & Deploy to K3s
 ```
+
+---
+
+## 🔄 Airflow DAGs
+
+Hệ thống sử dụng **Apache Airflow 2.8** để orchestrate pipeline với 2 DAGs:
+
+### csv_daily_import
+- **Lịch**: 2h sáng hàng ngày (`0 2 * * *`)
+- **Nhiệm vụ**: Import CSV/Excel từ `csv_input/` vào **PostgreSQL**
+- **Luồng**: Check files → Process → Import PostgreSQL
+- **Chi tiết**: [airflow/dags/csv_daily_import_dag.py](airflow/dags/csv_daily_import_dag.py)
+
+### retail_weekly_ml
+- **Lịch**: 4h sáng Chủ nhật (`0 4 * * 0`)
+- **Nhiệm vụ**: Full ML Pipeline
+- **Luồng chi tiết**:
+  ```
+  1. sync_pg_to_clickhouse: PostgreSQL → ClickHouse (60 ngày)
+  2. dbt_run_models: DBT transforms trên ClickHouse
+  3. dbt_run_tests: Data quality tests
+  4. train_forecast_models: XGBoost + Optuna tuning
+  5. generate_forecasts: Dự báo tuần tới
+  6. refresh_superset_cache: Refresh BI cache
+  ```
+- **Chi tiết**: [airflow/dags/retail_pipeline_dag.py](airflow/dags/retail_pipeline_dag.py)
+
+### Truy cập Airflow
+
+| Môi trường | URL | Credentials |
+|------------|-----|-------------|
+| Docker | http://localhost:8085 | admin/admin |
+| K3s | http://192.168.102.17:30080 | admin/admin |
+
+> **Lưu ý**: Các DAG mặc định ở trạng thái **Paused**. Vào Web UI → DAGs → Bật (Unpause) để tự động chạy.
 
 ---
 

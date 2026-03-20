@@ -18,7 +18,8 @@ Hệ thống data pipeline hoàn chỉnh với ETL tự động, Data Warehouse,
 6. [Import dữ liệu CSV](#import-dữ-liệu-csv)
 7. [Chạy DBT Project](#chạy-dbt-project)
 8. [Chạy ML Models](#chạy-ml-models)
-9. [Kết nối Superset BI](#kết-nối-superset-bi)
+9. [Airflow Workflow](#-airflow-workflow-orchestration)
+10. [Kết nối Superset BI](#kết-nối-superset-bi)
 10. [Troubleshooting](#troubleshooting)
 
 ---
@@ -345,7 +346,33 @@ kubectl get events -n hasu-ml --sort-by='.lastTimestamp'
 
 ### Tự động (Airflow Schedule)
 
-Hệ thống tự động import CSV **hàng ngày lúc 2h sáng** thông qua Airflow DAG.
+Hệ thống tự động chạy pipeline thông qua **Apache Airflow** với 2 DAGs:
+
+| DAG | Lịch chạy | Mô tả |
+|-----|-----------|-------|
+| **csv_daily_import** | 2h sáng hàng ngày | Import CSV/Excel → PostgreSQL |
+| **retail_weekly_ml** | 4h sáng Chủ nhật | Sync CH → DBT → Train ML → Forecast |
+
+**Luồng pipeline:**
+```
+Hàng ngày 2am:    CSV/Excel ──► PostgreSQL (csv_daily_import)
+                         │
+Hàng tuần CN 4am:       ▼
+              PostgreSQL ──► ClickHouse (sync)
+                    │
+                   DBT transforms
+                    │
+               Train ML models
+                    │
+               Generate forecasts
+```
+
+**Truy cập Airflow Web UI:**
+- K3s: http://192.168.102.17:30080
+- Docker: http://localhost:8085
+- Username/Password: admin/admin
+
+> **⚠️ Lưu ý**: Các DAG mặc định ở trạng thái **Paused**. Vào Airflow UI → DAGs → Bật (Unpause) để kích hoạt lịch tự động.
 
 ### Import thủ công (⚡ Python ETL - Khuyến nghị)
 
@@ -523,6 +550,64 @@ predicted_qty = category_median * seasonal_factor / 7
 ```
 
 Xem chi tiết: [ml_pipeline/ML_EXPLAIN.md](ml_pipeline/ML_EXPLAIN.md)
+
+---
+
+## 🔄 Airflow Workflow Orchestration
+
+Hệ thống sử dụng **Apache Airflow 2.8** để tự động hóa data pipeline với 2 DAGs chính:
+
+### 📅 Lịch trình DAGs
+
+| DAG | Tần suất | Mô tả | Lệnh trigger |
+|-----|----------|-------|--------------|
+| **csv_daily_import** | 2h sáng hàng ngày | Import CSV/Excel → PostgreSQL | `make airflow-trigger csv_daily_import` |
+| **retail_weekly_ml** | 4h sáng Chủ nhật | Full ML Pipeline (Sync→DBT→Train→Predict) | `make airflow-trigger retail_weekly_ml` |
+
+### 🔄 Chi tiết retail_weekly_ml Pipeline
+
+```
+┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
+│ 1. sync_pg_to_ch    │───▶│ 2. dbt_run_models   │───▶│ 3. dbt_run_tests    │
+│    PostgreSQL→CH    │    │    Transform data   │    │    Data quality     │
+└─────────────────────┘    └─────────────────────┘    └─────────────────────┘
+          │                                                 │
+          ▼                                                 ▼
+┌─────────────────────┐    ┌─────────────────────┐
+│ 5. refresh_superset │◄───│ 4. train_models     │
+│    Cache refresh    │    │    XGBoost + Optuna │
+└─────────────────────┘    └─────────────────────┘
+                                    │
+                                    ▼
+                           ┌─────────────────────┐
+                           │ 6. generate_forecast│
+                           │    Dự báo tuần tới  │
+                           └─────────────────────┘
+```
+
+### 🔧 Truy cập Airflow UI
+
+| Môi trường | URL | Credentials |
+|------------|-----|-------------|
+| Docker | http://localhost:8085 | admin/admin |
+| K3s | http://192.168.102.17:30080 | admin/admin |
+
+> **⚠️ Lưu ý**: Các DAG mặc định ở trạng thái **Paused**. Vào Airflow Web UI → DAGs → Unpause để kích hoạt lịch tự động.
+
+### 🚀 Commands
+
+```bash
+# Trigger DAG thủ công
+make airflow-trigger retail_weekly_ml
+make airflow-trigger csv_daily_import
+
+# Xem logs
+kubectl logs -n hasu-ml deployment/airflow-web -f
+kubectl logs -n hasu-ml deployment/airflow-scheduler -f
+
+# Port-forward để truy cập UI (nếu dùng K3s)
+kubectl port-forward -n hasu-ml svc/airflow-web 8085:8080
+```
 
 ---
 
@@ -873,6 +958,19 @@ def process_inventory_pyspark(spark):
 ---
 
 ## 🆕 Cập nhật (2026-03-18)
+
+### 🔄 Airflow Documentation
+
+Thêm tài liệu chi tiết về Airflow Workflow Orchestration:
+
+| Nội dung | Vị trí |
+|----------|--------|
+| **Airflow section** | README.md - sau ML Models |
+| **DAG details** | AGENTS.md - phần Airflow DAGs |
+| **Workflow diagram** | Chi tiết 6 bước retail_weekly_ml |
+| **Commands** | Trigger DAG, view logs, port-forward |
+
+> **⚠️ Lưu ý quan trọng**: DAGs mặc định ở trạng thái **Paused**. Cần unpause trong Airflow UI để kích hoạt lịch tự động.
 
 ### 🤖 ML Pipeline Refactoring ⭐
 
