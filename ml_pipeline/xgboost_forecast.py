@@ -1979,42 +1979,69 @@ class SalesForecaster:
                     products_str = "', '".join(str(p) for p in product_list)
                     
                     # Lấy tuần mới nhất có dữ liệu để tính "tuần trước" chính xác
+                    # Query tất cả các tuần có dữ liệu, sắp xếp theo năm-tuần giảm dần
                     current_week_query = """
-                    SELECT 
-                        toWeek(MAX(transaction_date)) as current_week,
-                        toYear(MAX(transaction_date)) as current_year
+                    SELECT DISTINCT
+                        toYear(transaction_date) as year,
+                        toWeek(transaction_date) as week
                     FROM retail_dw.fct_regular_sales
+                    ORDER BY year DESC, week DESC
+                    LIMIT 2
                     """
                     week_result = self.ch.query(current_week_query)
-                    if week_result is not None and len(week_result) > 0 and week_result.iloc[0, 0] is not None:
-                        current_week = int(week_result.iloc[0, 0])
-                        current_year = int(week_result.iloc[0, 1])
-                        # Tính tuần trước (xử lý chuyển năm)
-                        if current_week == 1:
-                            # Tuần 1 thì tuần trước là tuần cuối năm trước
-                            last_week = 52
-                            last_year = current_year - 1
-                        else:
-                            last_week = current_week - 1
-                            last_year = current_year
-                        logger.info(f"   Tuần hiện tại: {current_year}-W{current_week:02d}, Tuần trước: {last_year}-W{last_week:02d}")
+                    if week_result is not None and len(week_result) >= 2:
+                        # Tuần mới nhất có dữ liệu
+                        current_week = int(week_result.iloc[0]['week'])
+                        current_year = int(week_result.iloc[0]['year'])
+                        # Tuần trước (tuần thứ 2 trong kết quả)
+                        last_week = int(week_result.iloc[1]['week'])
+                        last_year = int(week_result.iloc[1]['year'])
+                        logger.info(f"   Tuần gần nhất có dữ liệu: {current_year}-W{current_week:02d}")
+                        logger.info(f"   Tuần trước (so sánh): {last_year}-W{last_week:02d}")
+                    elif week_result is not None and len(week_result) == 1:
+                        # Chỉ có 1 tuần dữ liệu, dùng tuần đó làm tuần trước
+                        last_week = int(week_result.iloc[0]['week'])
+                        last_year = int(week_result.iloc[0]['year'])
+                        logger.warning(f"   Chỉ có 1 tuần dữ liệu: {last_year}-W{last_week:02d}")
                     else:
-                        # Fallback: dùng tuần của today() - 1
-                        last_week = "toWeek(today()) - 1"
-                        last_year = "toYear(today())"
-                        logger.warning("   Không lấy được tuần dữ liệu, dùng toWeek(today()) - 1")
+                        # Fallback: dùng 7 ngày trước
+                        logger.warning("   Không lấy được tuần dữ liệu, dùng 7 ngày gần nhất")
+                        last_week = None
                     
-                    # Query theo tuần (từ thứ 2 đến chủ nhật tuần trước)
-                    last_week_query = f"""
-                    SELECT 
-                        f.product_code as ma_hang,
-                        SUM(f.quantity_sold) as last_week_sales
-                    FROM retail_dw.fct_regular_sales f
-                    WHERE f.product_code IN ('{products_str}')
-                      AND toYear(f.transaction_date) = {last_year}
-                      AND toWeek(f.transaction_date) = {last_week}
-                    GROUP BY f.product_code
-                    """
+                    # Query theo tuần hoặc 7 ngày gần nhất
+                    if last_week is not None:
+                        # Query theo tuần (từ thứ 2 đến chủ nhật tuần trước)
+                        last_week_query = f"""
+                        SELECT 
+                            f.product_code as ma_hang,
+                            SUM(f.quantity_sold) as last_week_sales
+                        FROM retail_dw.fct_regular_sales f
+                        WHERE f.product_code IN ('{products_str}')
+                          AND toYear(f.transaction_date) = {last_year}
+                          AND toWeek(f.transaction_date) = {last_week}
+                        GROUP BY f.product_code
+                        """
+                        logger.info(f"   Query tuần {last_year}-W{last_week:02d}")
+                    else:
+                        # Fallback: 7 ngày gần nhất có dữ liệu
+                        last_week_query = f"""
+                        SELECT 
+                            f.product_code as ma_hang,
+                            SUM(f.quantity_sold) as last_week_sales
+                        FROM retail_dw.fct_regular_sales f
+                        WHERE f.product_code IN ('{products_str}')
+                          AND f.transaction_date >= (
+                              SELECT MAX(transaction_date) - INTERVAL 7 DAY 
+                              FROM retail_dw.fct_regular_sales
+                          )
+                          AND f.transaction_date < (
+                              SELECT MAX(transaction_date) 
+                              FROM retail_dw.fct_regular_sales
+                          )
+                        GROUP BY f.product_code
+                        """
+                        logger.info("   Query 7 ngày gần nhất có dữ liệu")
+                    
                     last_week_df = self.ch.query(last_week_query)
                     
                     if not last_week_df.empty:
