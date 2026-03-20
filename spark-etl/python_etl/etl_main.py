@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
 PySpark ETL Pipeline - Logic từ data_cleaning đã chuyển sang PySpark
-- import_products: TRUNCATE + INSERT, parse nhóm hàng 3 cấp
-- import_sales: DELETE by date + INSERT, aggregate transactions
+- import_products: UPSERT (ON CONFLICT UPDATE), parse nhóm hàng 3 cấp
+- import_sales: UPSERT (ON CONFLICT DO NOTHING), aggregate transactions
 """
 
 import os
 import re
 import logging
 from datetime import datetime
+import psycopg2
+from psycopg2.extras import execute_values
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     udf,
@@ -155,6 +157,27 @@ def process_products_pyspark(spark):
             col_map['ma_vach'] = c
         elif 'quy' in lc and 'đổi' in lc:
             col_map['quy_doi'] = c
+        # INVENTORY columns from DanhSachSanPham
+        elif 'tồn' in lc and ('kho' in lc or 'hiện tại' in lc or 'current' in lc):
+            col_map['current_stock'] = c
+        elif 'tồn' in lc and ('nhỏ' in lc or 'tối thiểu' in lc or 'min' in lc):
+            col_map['min_stock'] = c
+        elif 'tồn' in lc and ('lớn' in lc or 'tối đa' in lc or 'max' in lc):
+            col_map['max_stock'] = c
+    
+    # DEBUG: Log column mapping for inventory
+    logger.info(f"DEBUG col_map inventory: current_stock={col_map.get('current_stock', 'NOT FOUND')}, min_stock={col_map.get('min_stock', 'NOT FOUND')}, max_stock={col_map.get('max_stock', 'NOT FOUND')}")
+    
+    # DEBUG: Check raw values from DataFrame
+    current_stock_col = col_map.get('current_stock')
+    min_stock_col = col_map.get('min_stock')
+    logger.info(f"DEBUG current_stock_col name: {repr(current_stock_col)}")
+    logger.info(f"DEBUG min_stock_col name: {repr(min_stock_col)}")
+    
+    # Sample raw values
+    sample_rows = df.select(current_stock_col, min_stock_col).limit(5).collect()
+    for i, row in enumerate(sample_rows):
+        logger.info(f"DEBUG Row {i}: current_stock={repr(row[0])}, min_stock={repr(row[1])}")
     
     # Clean numeric columns for prices
     df_with_prices = df.select(
@@ -167,6 +190,11 @@ def process_products_pyspark(spark):
         clean_numeric_udf(col(col_map.get('gia_von', lit('0')))).alias("gia_von_mac_dinh"),
         # Add quy_doi column (default 1 if not present)
         clean_numeric_udf(col(col_map.get('quy_doi', lit('1')))).cast("int").alias("quy_doi"),
+        # INVENTORY columns from DanhSachSanPham
+        # Use expr with backticks for column names with spaces
+        clean_numeric_udf(expr(f"`{col_map.get('current_stock', '0')}`")).cast("double").alias("current_stock"),
+        clean_numeric_udf(expr(f"`{col_map.get('min_stock', '0')}`")).cast("int").alias("min_stock"),
+        clean_numeric_udf(expr(f"`{col_map.get('max_stock', '0')}`")).cast("int").alias("max_stock"),
         current_timestamp().alias("created_at")
     )
     
@@ -180,11 +208,26 @@ def process_products_pyspark(spark):
         col("gia_ban_mac_dinh"),
         col("gia_von_mac_dinh"),
         col("quy_doi"),
+        # INVENTORY columns from DanhSachSanPham
+        col("current_stock"),
+        col("min_stock"),
+        col("max_stock"),
         col("created_at")
     ).dropDuplicates(["ma_hang"])
     
     count = df_final.count()
     logger.info(f"   ✅ {count} products")
+    
+    # DEBUG: Count inventory stats
+    from pyspark.sql.functions import sum as spark_sum, count as spark_count, when
+    stock_stats = df_final.agg(
+        spark_sum("current_stock").alias("total_stock"),
+        spark_count(when(col("current_stock") > 0, 1)).alias("products_with_stock"),
+        spark_sum("min_stock").alias("total_min_stock"),
+        spark_count(when(col("min_stock") > 0, 1)).alias("products_with_min_stock")
+    ).collect()[0]
+    logger.info(f"   DEBUG: total_stock={stock_stats['total_stock']}, products_with_stock={stock_stats['products_with_stock']}")
+    logger.info(f"   DEBUG: total_min_stock={stock_stats['total_min_stock']}, products_with_min_stock={stock_stats['products_with_min_stock']}")
     
     pg_url = f"jdbc:postgresql://{os.getenv('POSTGRES_HOST','postgres')}:5432/{os.getenv('POSTGRES_DB','retail_db')}"
     pg_props = {
@@ -193,7 +236,6 @@ def process_products_pyspark(spark):
         "driver": "org.postgresql.Driver"
     }
     
-    import psycopg2
     conn = psycopg2.connect(
         host=os.getenv('POSTGRES_HOST','postgres'),
         database=os.getenv('POSTGRES_DB','retail_db'),
@@ -202,11 +244,46 @@ def process_products_pyspark(spark):
     )
     conn.autocommit = True
     with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE products CASCADE")
+        # Add inventory columns if not exist
+        cur.execute("""
+            ALTER TABLE products 
+            ADD COLUMN IF NOT EXISTS current_stock DOUBLE PRECISION DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS min_stock INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS max_stock INTEGER DEFAULT 0
+        """)
     conn.close()
     
-    df_final.write.jdbc(pg_url, "products", mode="append", properties=pg_props)
-    logger.info(f"   ✅ Inserted {count} products")
+    # UPSERT products using psycopg2 (avoid TRUNCATE to preserve historical data)
+    logger.info(f"   🔄 UPSERTING {count} products...")
+    conn = psycopg2.connect(
+        host=os.getenv('POSTGRES_HOST','postgres'),
+        database=os.getenv('POSTGRES_DB','retail_db'),
+        user=os.getenv('POSTGRES_USER','retail_user'),
+        password=os.getenv('POSTGRES_PASSWORD','retail_password')
+    )
+    conn.autocommit = True
+    
+    # Convert to list of tuples for upsert
+    products_data = [(row['ma_hang'], row['ten_hang'], row['cap_1'], row['cap_2'], row['cap_3'], 
+                      row['don_vi_tinh'], row['quy_doi'], row['thuong_hieu']) 
+                     for _, row in df_final.toPandas().iterrows()]
+    
+    with conn.cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO products (ma_hang, ten_hang, cap_1, cap_2, cap_3, don_vi_tinh, quy_doi, thuong_hieu)
+            VALUES %s
+            ON CONFLICT (ma_hang) DO UPDATE SET
+                ten_hang = EXCLUDED.ten_hang,
+                cap_1 = EXCLUDED.cap_1,
+                cap_2 = EXCLUDED.cap_2,
+                cap_3 = EXCLUDED.cap_3,
+                don_vi_tinh = EXCLUDED.don_vi_tinh,
+                quy_doi = EXCLUDED.quy_doi,
+                thuong_hieu = EXCLUDED.thuong_hieu
+        """, products_data)
+    
+    conn.close()
+    logger.info(f"   ✅ UPSERTED {count} products")
 
 def process_sales_pyspark(spark):
     import glob
@@ -302,9 +379,9 @@ def process_sales_pyspark(spark):
             "driver": "org.postgresql.Driver"
         }
         
-        # TRUNCATE tables trước khi insert để tránh duplicate
-        logger.info("   🗑️  Truncating old data...")
-        import psycopg2
+        # UPSERT transactions để tránh duplicate
+        logger.info("   🔄 UPSERT transactions...")
+        
         conn = psycopg2.connect(
             host=os.getenv('POSTGRES_HOST','postgres'),
             database=os.getenv('POSTGRES_DB','retail_db'),
@@ -312,13 +389,21 @@ def process_sales_pyspark(spark):
             password=os.getenv('POSTGRES_PASSWORD','retail_password')
         )
         conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE transaction_details CASCADE")
-            cur.execute("TRUNCATE TABLE transactions CASCADE")
-        conn.close()
-        logger.info("   ✅ Truncated old data")
         
-        trans_agg.write.jdbc(pg_url, "transactions", mode="append", properties=pg_props)
+        # Chuyển trans_agg sang list
+        trans_data = [(row['ma_giao_dich'], row['ma_chi_nhanh'], row['ngay']) 
+                      for _, row in trans_agg.toPandas().iterrows()]
+        
+        with conn.cursor() as cur:
+            # UPSERT transactions
+            execute_values(cur, """
+                INSERT INTO transactions (ma_giao_dich, chi_nhanh_id, thoi_gian)
+                VALUES (%s, (SELECT id FROM branches WHERE ma_chi_nhanh = %s LIMIT 1), %s)
+                ON CONFLICT (ma_giao_dich, thoi_gian) DO NOTHING
+            """, trans_data)
+        
+        conn.close()
+        logger.info("   ✅ UPSERTED transactions")
         
         # Đọc lại transactions để lấy transaction_id
         trans_mapping = spark.read.jdbc(pg_url, "transactions", properties=pg_props).select("id", "ma_giao_dich")
@@ -340,121 +425,6 @@ def process_sales_pyspark(spark):
         details_final.write.jdbc(pg_url, "transaction_details", mode="append", properties=pg_props)
         logger.info(f"   ✅ {trans_count} trans, {details_count} details")
 
-def process_inventory_pyspark(spark):
-    """Process inventory files (BaoCaoXuatNhapTon) and write directly to ClickHouse"""
-    import glob
-    files = glob.glob(f"{CSV_INPUT}/*XuatNhapTon*.xlsx") + glob.glob(f"{CSV_INPUT}/*XuatNhapTon*.csv")
-    if not files:
-        logger.warning("⚠️ No inventory files found")
-        return
-    
-    file_path = files[0]
-    filename = os.path.basename(file_path)
-    ngay_bao_cao = parse_date_from_filename(filename)
-    logger.info(f"📦 Inventory: {filename} | Date: {ngay_bao_cao}")
-    
-    # Read with pandas bridge
-    df = read_csv_with_pandas_bridge(spark, file_path)
-    total_rows = df.count()
-    logger.info(f"   📊 Rows: {total_rows}")
-    
-    # Column mapping
-    col_map = {}
-    for c in df.columns:
-        lc = c.lower()
-        if 'nhóm' in lc and 'hàng' in lc:
-            col_map['nhom_hang'] = c
-        elif 'mã' in lc and 'hàng' in lc:
-            col_map['ma_hang'] = c
-        elif 'mã' in lc and 'vạch' in lc:
-            col_map['ma_vach'] = c
-        elif 'tên' in lc and 'hàng' in lc:
-            col_map['ten_hang'] = c
-        elif 'thương' in lc and 'hiệu' in lc:
-            col_map['thuong_hieu'] = c
-        elif 'đơn' in lc and 'vị' in lc and 'tính' in lc:
-            col_map['don_vi_tinh'] = c
-        elif 'chi' in lc and 'nhánh' in lc:
-            col_map['chi_nhanh'] = c
-        elif 'tồn' in lc and 'đầu' in lc:
-            col_map['ton_dau'] = c
-        elif 'giá' in lc and 'trị' in lc and 'đầu' in lc:
-            col_map['gia_tri_dau'] = c
-        elif 'sl' in lc and 'nhập' in lc:
-            col_map['sl_nhap'] = c
-        elif 'giá' in lc and 'trị' in lc and 'nhập' in lc:
-            col_map['gia_tri_nhap'] = c
-        elif 'sl' in lc and 'xuất' in lc:
-            col_map['sl_xuat'] = c
-        elif 'giá' in lc and 'trị' in lc and 'xuất' in lc:
-            col_map['gia_tri_xuat'] = c
-        elif 'tồn' in lc and 'cuối' in lc:
-            col_map['ton_cuoi'] = c
-        elif 'giá' in lc and 'trị' in lc and 'cuối' in lc:
-            col_map['gia_tri_cuoi'] = c
-    
-    # Build select expressions
-    select_exprs = []
-    
-    # String columns
-    string_defaults = {
-        'nhom_hang': '', 'ma_hang': '', 'ma_vach': '', 'ten_hang': '',
-        'thuong_hieu': '', 'don_vi_tinh': '', 'chi_nhanh': ''
-    }
-    for key, default in string_defaults.items():
-        if key in col_map:
-            select_exprs.append(coalesce(trim(col(col_map[key])), lit(default)).alias(key))
-        else:
-            select_exprs.append(lit(default).alias(key))
-    
-    # Numeric columns
-    numeric_defaults = {
-        'ton_dau_ky': 0, 'gia_tri_dau_ky': 0, 'sl_nhap': 0, 'gia_tri_nhap': 0,
-        'sl_xuat': 0, 'gia_tri_xuat': 0, 'ton_cuoi_ky': 0, 'gia_tri_cuoi_ky': 0
-    }
-    col_mapping_numeric = {
-        'ton_dau_ky': 'ton_dau', 'gia_tri_dau_ky': 'gia_tri_dau',
-        'sl_nhap': 'sl_nhap', 'gia_tri_nhap': 'gia_tri_nhap',
-        'sl_xuat': 'sl_xuat', 'gia_tri_xuat': 'gia_tri_xuat',
-        'ton_cuoi_ky': 'ton_cuoi', 'gia_tri_cuoi_ky': 'gia_tri_cuoi'
-    }
-    for target, source in col_mapping_numeric.items():
-        if source in col_map:
-            select_exprs.append(clean_numeric_udf(col(col_map[source])).cast("double").alias(target))
-        else:
-            select_exprs.append(lit(numeric_defaults[target]).cast("double").alias(target))
-    
-    # Metadata columns
-    select_exprs.append(lit(ngay_bao_cao).cast("date").alias("snapshot_date"))
-    select_exprs.append(lit(filename).alias("source_file"))
-    select_exprs.append(current_timestamp().alias("created_at"))
-    
-    df_final = df.select(*select_exprs).filter(col("ma_hang").isNotNull() & (trim(col("ma_hang")) != ""))
-    final_count = df_final.count()
-    logger.info(f"   ✅ {final_count} inventory records after cleaning")
-    
-    # Write directly to ClickHouse
-    ch_url = f"jdbc:clickhouse://{os.getenv('CLICKHOUSE_HOST','clickhouse')}:9000/retail_dw?protocol=native"
-    ch_props = {
-        "user": os.getenv("CLICKHOUSE_USER","default"),
-        "password": os.getenv("CLICKHOUSE_PASSWORD",""),
-        "driver": "com.clickhouse.jdbc.ClickHouseDriver",
-        "batchsize": "10000"
-    }
-    
-    try:
-        # Overwrite mode for inventory - each snapshot replaces old data for that date
-        df_final.write.jdbc(ch_url, "staging_inventory_transactions", mode="append", properties=ch_props)
-        logger.info(f"   ✅ Written {final_count} records to ClickHouse.staging_inventory_transactions")
-        
-        # Show summary
-        total_ton_cuoi = df_final.agg(spark_sum("ton_cuoi_ky")).collect()[0][0] or 0
-        logger.info(f"   📊 Total closing stock: {total_ton_cuoi:,.0f}")
-        
-    except Exception as e:
-        logger.error(f"   ❌ Error writing to ClickHouse: {e}")
-        raise
-
 def main():
     logger.info("="*60)
     logger.info("🚀 PySpark ETL - Logic from data_cleaning")
@@ -462,8 +432,7 @@ def main():
     
     spark = get_spark_session()
     try:
-        process_products_pyspark(spark)
-        process_inventory_pyspark(spark)  # NEW: Direct to ClickHouse
+        process_products_pyspark(spark)  # Includes inventory data from DanhSachSanPham
         process_sales_pyspark(spark)
         logger.info("="*60)
         logger.info("✅ Complete!")
@@ -475,3 +444,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
