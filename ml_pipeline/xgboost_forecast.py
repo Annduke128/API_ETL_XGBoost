@@ -2081,11 +2081,13 @@ class SalesForecaster:
                             on='ma_hang', 
                             how='left'
                         )
-                        forecasts['sales_4weeks'] = forecasts['sales_4weeks'].fillna(0)
+                        forecasts['sales_4weeks'] = pd.to_numeric(forecasts['sales_4weeks'], errors='coerce').fillna(0)
                         
                         # 2. Loại bỏ sản phẩm A-class không có doanh số trong 4 tuần
                         original_count = len(forecasts)
                         if 'abc_class' in forecasts.columns:
+                            # Đảm bảo abc_class là string
+                            forecasts['abc_class'] = forecasts['abc_class'].astype(str)
                             # Giữ lại: B-class, C-class, hoặc A-class có sales_4weeks > 0
                             mask_keep = (
                                 (forecasts['abc_class'].isin(['B', 'C'])) | 
@@ -2128,7 +2130,11 @@ class SalesForecaster:
                         logger.warning(f"   ⚠️ Không lấy được dữ liệu tồn kho: {e}")
                         forecasts['ton_kho_nho_nhat'] = 0
                     
-                    # 4. Sắp xếp: last_week_sales DESC, rồi ton_kho_nho_nhat ASC
+                    # 4. Đảm bảo numeric type trước khi sắp xếp
+                    forecasts['last_week_sales'] = pd.to_numeric(forecasts['last_week_sales'], errors='coerce').fillna(0)
+                    forecasts['ton_kho_nho_nhat'] = pd.to_numeric(forecasts['ton_kho_nho_nhat'], errors='coerce').fillna(0)
+                    
+                    # 5. Sắp xếp: last_week_sales DESC, rồi ton_kho_nho_nhat ASC
                     forecasts = forecasts.sort_values(
                         by=['last_week_sales', 'ton_kho_nho_nhat'], 
                         ascending=[False, True]
