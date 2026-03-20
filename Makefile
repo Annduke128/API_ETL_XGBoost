@@ -644,15 +644,6 @@ app-k3s: kubectl-check
 	@echo "╚══════════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "Check results: make k3s-logs"
-
-# Full pipeline on K3s with GPU for ML Training
-	@echo "📄 Running CSV Processing on K3s..."
-	-$(KUBECTL_CMD) delete job csv-process -n $(NAMESPACE) 2>/dev/null || true
-	@sleep 2
-	@cat $(K8S_DIR)/05-ml-pipeline/job-csv-process.yaml | sed 's|$${DOCKERHUB_USERNAME}|$(DOCKERHUB_USERNAME)|g' | $(KUBECTL_CMD) apply -f -
-	$(KUBECTL_CMD) wait --for=condition=complete job/csv-process -n $(NAMESPACE) --timeout=600s
-	@echo "✅ CSV processing complete!"
-
 k3s-sync: kubectl-check
 	@echo "📥 Running Sync on K3s..."
 	-$(KUBECTL_CMD) delete job sync-data -n $(NAMESPACE) 2>/dev/null || true
@@ -807,8 +798,6 @@ spark-delete:
 	@echo "⚠️  Deleting Spark cluster..."
 	$(KUBECTL_CMD) delete namespace spark --ignore-not-found=true
 	@echo "✅ Spark cluster deleted"
-
-
 # ============================================================================
 # GPU ML TRAINING
 # ============================================================================
