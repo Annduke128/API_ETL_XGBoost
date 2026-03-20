@@ -2059,6 +2059,92 @@ class SalesForecaster:
                     logger.warning(f"⚠️ Không thể lấy dữ liệu tuần trước: {e}")
                     forecasts['last_week_sales'] = 0
                 
+                # === LỌC VÀ SẮP XẾP THEO YÊU CẦU MỚI ===
+                logger.info("📊 Áp dụng logic lọc và sắp xếp mới...")
+                try:
+                    # 1. Query doanh số 4 tuần gần nhất cho từng sản phẩm
+                    products_str = "', '".join(str(p) for p in forecasts['ma_hang'].unique())
+                    sales_4weeks_query = f"""
+                    SELECT 
+                        product_code as ma_hang,
+                        SUM(quantity_sold) as sales_4weeks
+                    FROM retail_dw.fct_regular_sales
+                    WHERE product_code IN ('{products_str}')
+                      AND transaction_date >= today() - INTERVAL 28 DAY
+                    GROUP BY product_code
+                    """
+                    sales_4weeks_df = self.ch.query(sales_4weeks_query)
+                    
+                    if not sales_4weeks_df.empty:
+                        forecasts = forecasts.merge(
+                            sales_4weeks_df[['ma_hang', 'sales_4weeks']], 
+                            on='ma_hang', 
+                            how='left'
+                        )
+                        forecasts['sales_4weeks'] = forecasts['sales_4weeks'].fillna(0)
+                        
+                        # 2. Loại bỏ sản phẩm A-class không có doanh số trong 4 tuần
+                        original_count = len(forecasts)
+                        if 'abc_class' in forecasts.columns:
+                            # Giữ lại: B-class, C-class, hoặc A-class có sales_4weeks > 0
+                            mask_keep = (
+                                (forecasts['abc_class'].isin(['B', 'C'])) | 
+                                ((forecasts['abc_class'] == 'A') & (forecasts['sales_4weeks'] > 0))
+                            )
+                            removed_a_class = forecasts[(forecasts['abc_class'] == 'A') & (forecasts['sales_4weeks'] == 0)]
+                            if len(removed_a_class) > 0:
+                                logger.info(f"   🗑️  Loại bỏ {len(removed_a_class)} sản phẩm A-class không có doanh số 4 tuần qua")
+                            forecasts = forecasts[mask_keep].copy()
+                        
+                        logger.info(f"   📊 Còn lại {len(forecasts)}/{original_count} sản phẩm sau khi lọc")
+                    
+                    # 3. Query tồn kho nhỏ nhất (ton_kho_nho_nhat)
+                    inventory_query = f"""
+                    SELECT 
+                        p.product_code as ma_hang,
+                        MIN(i.ton_kho) as ton_kho_nho_nhat
+                    FROM retail_dw.dim_product p
+                    LEFT JOIN (
+                        SELECT product_code, MIN(stock_quantity) as ton_kho
+                        FROM retail_dw.staging_inventory_transactions
+                        WHERE snapshot_date >= today() - INTERVAL 7 DAY
+                        GROUP BY product_code
+                    ) i ON p.product_code = i.product_code
+                    WHERE p.product_code IN ('{products_str}')
+                    GROUP BY p.product_code
+                    """
+                    try:
+                        inventory_df = self.ch.query(inventory_query)
+                        if not inventory_df.empty:
+                            forecasts = forecasts.merge(
+                                inventory_df[['ma_hang', 'ton_kho_nho_nhat']], 
+                                on='ma_hang', 
+                                how='left'
+                            )
+                            forecasts['ton_kho_nho_nhat'] = forecasts['ton_kho_nho_nhat'].fillna(0)
+                        else:
+                            forecasts['ton_kho_nho_nhat'] = 0
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ Không lấy được dữ liệu tồn kho: {e}")
+                        forecasts['ton_kho_nho_nhat'] = 0
+                    
+                    # 4. Sắp xếp: last_week_sales DESC, rồi ton_kho_nho_nhat ASC
+                    forecasts = forecasts.sort_values(
+                        by=['last_week_sales', 'ton_kho_nho_nhat'], 
+                        ascending=[False, True]
+                    ).reset_index(drop=True)
+                    
+                    logger.info(f"   ✅ Đã sắp xếp: 1) Bán tuần trước (cao→thấp) 2) Tồn kho nhỏ nhất (thấp→cao)")
+                    
+                    # Log top 10 sau khi sắp xếp
+                    top_10 = forecasts.head(10)[['ma_hang', 'ten_san_pham', 'last_week_sales', 'ton_kho_nho_nhat', 'abc_class']]
+                    logger.info(f"   📋 Top 10 sản phẩm sau sắp xếp:")
+                    for idx, row in top_10.iterrows():
+                        logger.info(f"      {row['ma_hang']} | {row['ten_san_pham'][:25]:<25} | Bán T-{row['last_week_sales']:>4.0f} | Tồn {row['ton_kho_nho_nhat']:>4.0f} | {row['abc_class']}")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Lỗi khi áp dụng logic lọc/sắp xếp: {e}")
+                
                 # Lấy một số khuyến nghị tồn kho cho top products
                 inventory_recs = []
                 if 'ma_hang' in forecasts.columns:
