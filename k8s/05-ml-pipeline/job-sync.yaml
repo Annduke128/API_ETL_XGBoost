@@ -28,9 +28,8 @@ spec:
 
       containers:
       - name: sync
-        image: ${DOCKERHUB_USERNAME}/hasu-sync-tool:latest
+        image: annduke/hasu-sync-tool:dedup-v1
         imagePullPolicy: Always
-        command: ["python", "sync_to_clickhouse.py"]
         envFrom:
         - configMapRef:
             name: hasu-ml-config

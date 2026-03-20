@@ -12,7 +12,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: pipeline
-        image: ${DOCKERHUB_USERNAME}/hasu-ml-pipeline:latest
+        image: annduke/hasu-ml-pipeline:gpu-stable-v3
         imagePullPolicy: Always
         command: ["/bin/bash"]
         args:
