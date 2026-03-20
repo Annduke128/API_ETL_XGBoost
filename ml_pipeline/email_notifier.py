@@ -323,11 +323,12 @@ class EmailNotifier:
                               data_quality: Dict = None) -> str:
         """Tạo HTML cho training report với metrics phù hợp cho từng model"""
         
-        # Map model names đến (display_name, primary_metric, metric_label)
+        # Map model names đến (display_name, cv_metric, val_metric, metric_label)
+        # Sử dụng Validation metrics làm primary (chỉ báo validation cho end user)
         model_info_map = {
-            'daily_quantity': ('Product Quantity (Model 1)', 'cv_mdape', 'MdAPE'),
-            'profit_margin': ('Profit Margin (Model 2)', 'cv_mae', 'MAE'),
-            'category_daily_quantity': ('Category Trend (Model 3)', 'cv_mape', 'MAPE')
+            'daily_quantity': ('Product Quantity (Model 1)', 'cv_mdape', 'val_mdape', 'MdAPE'),
+            'profit_margin': ('Profit Margin (Model 2)', 'cv_mae', 'val_mae', 'MAE'),
+            'category_daily_quantity': ('Category Trend (Model 3)', 'cv_mape', 'val_mape', 'MAPE')
         }
         
         # Tạo rows cho metrics table
@@ -336,25 +337,32 @@ class EmailNotifier:
             tuning_method = model_metrics.get('tuning_method', 'default')
             primary_metric = model_metrics.get('primary_metric', 'mape')
             
-            # Lấy thông tin model
-            display_name, cv_key, metric_label = model_info_map.get(
-                model_key, (model_key, 'cv_mape', 'MAPE')
+            # Lấy thông tin model (cv_metric chỉ dùng để reference, val_metric là primary)
+            display_name, cv_key, val_key, metric_label = model_info_map.get(
+                model_key, (model_key, 'cv_mape', 'val_mape', 'MAPE')
             )
             
             # Lấy giá trị metrics
             cv_value = model_metrics.get(cv_key, 'N/A')
+            val_value = model_metrics.get(val_key, 'N/A')
             val_rmse = model_metrics.get('val_rmse', 'N/A')
             val_mae = model_metrics.get('val_mae', 'N/A')
             val_mape = model_metrics.get('val_mape', 'N/A')
             val_mdape = model_metrics.get('val_mdape', 'N/A')
             
-            # Format giá trị
+            # Format giá trị - Primary: Validation, Secondary: CV (reference)
+            if isinstance(val_value, float):
+                val_str = f"{val_value:.4f}" if val_value < 1 else f"{val_value:.2f}"
+                val_color = self._get_mape_color(val_value / 100 if val_value > 1 else val_value)
+            else:
+                val_str = str(val_value)
+                val_color = '#333'
+            
+            # CV chỉ hiển thị như reference
             if isinstance(cv_value, float):
                 cv_str = f"{cv_value:.4f}" if cv_value < 1 else f"{cv_value:.2f}"
-                cv_color = self._get_mape_color(cv_value / 100 if cv_value > 1 else cv_value)
             else:
                 cv_str = str(cv_value)
-                cv_color = '#333'
             
             val_rmse_str = f"{val_rmse:.2f}" if isinstance(val_rmse, float) else 'N/A'
             val_mae_str = f"{val_mae:.4f}" if isinstance(val_mae, float) else 'N/A'
@@ -370,7 +378,9 @@ class EmailNotifier:
                         </span>
                     </td>
                     <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center; 
-                               color: {cv_color}; font-weight: bold;">{cv_str} <small>({metric_label})</small></td>
+                               color: {val_color}; font-weight: bold;">{val_str} <small>({metric_label})</small>
+                        <br><small style="color: #999; font-weight: normal;">CV: {cv_str}</small>
+                    </td>
                     <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center;">{val_mae_str}</td>
                     <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center;">{val_mape_str}</td>
                     <td style="padding: 12px; border-bottom: 1px solid #e0e0e0; text-align: center;">{val_rmse_str}</td>
@@ -446,7 +456,7 @@ class EmailNotifier:
                             <tr>
                                 <th>Model</th>
                                 <th style="text-align: center;">Method</th>
-                                <th style="text-align: center;">Primary Metric ↓</th>
+                                <th style="text-align: center;">Val Primary ↓<br><small style="font-weight: normal;">(CV ref)</small></th>
                                 <th style="text-align: center;">Val MAE ↓</th>
                                 <th style="text-align: center;">Val MAPE ↓</th>
                                 <th style="text-align: center;">Val RMSE ↓</th>
@@ -466,13 +476,15 @@ class EmailNotifier:
                                 padding: 15px; margin: 20px 0; border-radius: 4px;">
                         <h4 style="margin: 0 0 10px 0; color: #e65100;">📌 Giải thích Metrics</h4>
                         <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #666;">
-                            <li><strong>Model 1 - MdAPE (Median Absolute Percentage Error):</strong> Trung vị % sai số. Ít nhạy với outliers hơn MAPE. Dùng cho dự báo số lượng.</li>
-                            <li><strong>Model 2 - MAE (Mean Absolute Error):</strong> Sai số tuyệt đối trung bình. Phù hợp cho profit margin (range 0-1).</li>
-                            <li><strong>Model 3 - MAPE (Mean Absolute Percentage Error):</strong> % sai số trung bình. Dùng cho category trend.</li>
-                            <li><strong>RMSE (Root Mean Square Error):</strong> Sai số bình phương trung bình, nhạy cảm với outliers.</li>
+                            <li><strong>Val Primary:</strong> Validation metrics - đánh giá cuối cùng trên 20% data chưa từng thấy. Giá trị nhỏ = tốt.</li>
+                            <li><strong>CV (trong ngoặc):</strong> Cross-validation score từ quá trình tối ưu hyperparameters.</li>
+                            <li><strong>Model 1 - MdAPE:</strong> Median Absolute Percentage Error. Trung vị % sai số, ít nhạy với outliers.</li>
+                            <li><strong>Model 2 - MAE:</strong> Mean Absolute Error. Sai số tuyệt đối trung bình (đơn vị).</li>
+                            <li><strong>MAPE:</strong> Mean Absolute Percentage Error. % sai số trung bình.</li>
+                            <li><strong>RMSE:</strong> Root Mean Square Error. Sai số bình phương trung bình, nhạy với outliers.</li>
                         </ul>
                         <p style="margin: 10px 0 0 0; font-size: 12px; color: #999;">
-                            <strong>Lưu ý:</strong> Model 3 có độ tin cậy thấp do thiếu dữ liệu mùa vụ (&lt; 1 năm).
+                            <strong>Lưu ý:</strong> Tất cả metrics đều là Validation metrics (test trên dữ liệu tương lai), đảm bảo đánh giá thực tế.
                         </p>
                     </div>
                     
