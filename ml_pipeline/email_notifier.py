@@ -328,7 +328,7 @@ class EmailNotifier:
         model_info_map = {
             'daily_quantity': ('Product Quantity (Model 1)', 'cv_mdape', 'val_mdape', 'MdAPE'),
             'profit_margin': ('Profit Margin (Model 2)', 'cv_mae', 'val_mae', 'MAE'),
-            'category_daily_quantity': ('Category Trend (Model 3)', 'cv_mape', 'val_mape', 'MAPE')
+            'category_daily_quantity': ('Category Trend (Model 2)', 'cv_mape', 'val_mape', 'MAPE')
         }
         
         # Tạo rows cho metrics table
@@ -684,8 +684,8 @@ class EmailNotifier:
                     'suggested_order': suggested_order
                 })
             
-            # Sắp xếp theo dự báo giảm dần
-            product_data.sort(key=lambda x: x['suggested_order'], reverse=True)
+            # Giữ nguyên thứ tự từ forecasts (đã được sắp xếp trong xgboost_forecast.py)
+            # Thứ tự: 1) last_week_sales DESC, 2) ton_kho_nho_nhat ASC
             
             # Tạo HTML cho bảng (top 50)
             for i, p in enumerate(product_data[:n_top], 1):
