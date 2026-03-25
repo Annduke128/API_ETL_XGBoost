@@ -1,0 +1,6 @@
+FROM annduke/hasu-spark-etl:real-final-v21
+
+# Copy updated Python ETL files
+COPY python_etl/etl_main.py /opt/spark/python_etl/
+
+ENTRYPOINT ["python3", "/opt/spark/python_etl/etl_main.py"]

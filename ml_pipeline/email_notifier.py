@@ -549,14 +549,18 @@ class EmailNotifier:
     
     def send_forecast_report(self, forecasts: pd.DataFrame, 
                            inventory_recommendations: Optional[List[Dict]] = None,
-                           model_dir: str = '/app/models') -> bool:
+                           model_dir: str = '/app/models',
+                           purchase_order_file: Optional[str] = None,
+                           category_forecasts: Optional[pd.DataFrame] = None) -> bool:
         """
         Gửi báo cáo kết quả dự báo cho recipients.forecast_report
         
         Args:
-            forecasts: DataFrame chứa kết quả dự báo
+            forecasts: DataFrame chứa kết quả dự báo (Model 1 - Product level)
             inventory_recommendations: List các khuyến nghị tồn kho
             model_dir: Thư mục chứa models
+            purchase_order_file: Đường dẫn file đơn hàng cần nhập (.xlsx)
+            category_forecasts: DataFrame chứa dự báo theo category (Model 2)
         
         Returns:
             True nếu gửi thành công
@@ -583,7 +587,9 @@ class EmailNotifier:
         subject = f"{subject_prefix} - {timestamp}"
         
         # Tạo HTML body và lấy logo info
-        html_body, logo_cid, logo_path = self._create_forecast_html(forecasts, inventory_recommendations, timestamp)
+        html_body, logo_cid, logo_path = self._create_forecast_html(
+            forecasts, inventory_recommendations, timestamp, category_forecasts
+        )
         
         # Chuẩn bị attachments
         attachments = []
@@ -598,10 +604,17 @@ class EmailNotifier:
             forecasts.to_csv(temp_path, index=False)
             attachments.append((temp_path, 'forecasts_latest.csv', None))
         
+        # Đính kèm file đơn hàng cần nhập
+        if purchase_order_file and os.path.exists(purchase_order_file):
+            file_name = os.path.basename(purchase_order_file)
+            attachments.append((purchase_order_file, file_name, None))
+            logger.info(f"📎 Đính kèm file đơn hàng: {file_name}")
+        
         return self._send_email(subject, html_body, attachments, report_type='forecast_report')
     
     def _create_forecast_html(self, forecasts: pd.DataFrame, 
-                             inventory_recs: Optional[List[Dict]], timestamp: str) -> tuple:
+                             inventory_recs: Optional[List[Dict]], timestamp: str,
+                             category_forecasts: Optional[pd.DataFrame] = None) -> tuple:
         """Tạo HTML cho forecast report - Bản dự báo doanh số HASU
         
         Returns:
@@ -658,21 +671,25 @@ class EmailNotifier:
                     trend_class = 'trend-stable'
                     trend_text = 'Ổn định'
                 
-                # Tồn kho tối ưu (safety_stock từ inventory_recs)
+                # Tồn kho tối ưu (recommended_safety_stock từ inventory_recs)
                 optimal_stock = 0
                 suggested_order = 0
                 
                 if inventory_recs:
                     for rec in inventory_recs:
                         if rec.get('product_code') == product_code:
-                            optimal_stock = rec.get('safety_stock', 0)
+                            # Sửa: dùng đúng key 'recommended_safety_stock'
+                            optimal_stock = rec.get('recommended_safety_stock', 0)
                             suggested_order = rec.get('suggested_order_quantity', 0)
                             break
                 
                 # Nếu không có trong inventory_recs, tính từ forecast
                 if optimal_stock == 0 and forecast_next_week > 0:
-                    optimal_stock = int(forecast_next_week)  # Tồn kho tối ưu = Dự báo (sẽ so sánh với tồn nhỏ nhất khi tính đơn đặt)
-                    suggested_order = max(0, optimal_stock - int(last_week_sales * 0.3))  # Ước tính: dự báo - tồn ước tính
+                    # Safety stock = 1.5 tuần dự báo (7 ngày * 1.5)
+                    optimal_stock = round(forecast_next_week * 1.5)
+                    # Suggested order = dự báo 30 ngày - tồn hiện tại (ước tính từ last_week)
+                    estimated_current_stock = last_week_sales  # Ước tính tồn hiện tại = bán tuần trước
+                    suggested_order = max(0, round(forecast_next_week * 4.3) - estimated_current_stock)
                 
                 product_data.append({
                     'code': product_code,
@@ -713,6 +730,97 @@ class EmailNotifier:
                 """
         else:
             combined_table_html = '<tr><td colspan="7" style="text-align: center; color: #999; padding: 20px;">Không có dữ liệu dự báo</td></tr>'
+        
+        # === TẠO HTML CHO MODEL 2: CATEGORY FORECAST ===
+        category_section_html = ""
+        if category_forecasts is not None and not category_forecasts.empty:
+            # Tính phần trăm nhu cầu theo ngành hàng
+            total_qty = category_forecasts['predicted_quantity'].sum() if 'predicted_quantity' in category_forecasts.columns else 1
+            
+            category_rows = []
+            for _, row in category_forecasts.iterrows():
+                category_name = row.get('nhom_hang_cap_1', row.get('category', 'Unknown'))
+                qty = row.get('predicted_quantity', 0)
+                pct = (qty / total_qty * 100) if total_qty > 0 else 0
+                
+                # Xác định màu dựa trên %
+                if pct >= 30:
+                    bar_color = '#e74c3c'  # Đỏ - cao
+                elif pct >= 20:
+                    bar_color = '#f39c12'  # Cam - trung bình cao
+                elif pct >= 10:
+                    bar_color = '#3498db'  # Xanh - trung bình
+                else:
+                    bar_color = '#2ecc71'  # Xanh lá - thấp
+                
+                category_rows.append({
+                    'name': category_name,
+                    'quantity': qty,
+                    'percentage': pct,
+                    'bar_color': bar_color
+                })
+            
+            # Sắp xếp theo % giảm dần
+            category_rows.sort(key=lambda x: x['percentage'], reverse=True)
+            
+            # Tạo HTML rows
+            category_table_rows = ""
+            for cat in category_rows:
+                bar_width = min(cat['percentage'], 100)  # Max 100%
+                category_table_rows += f"""
+                    <tr>
+                        <td style="padding: 12px 10px; border-bottom: 1px solid #e0e0e0; font-weight: 500;">{cat['name']}</td>
+                        <td style="padding: 12px 10px; border-bottom: 1px solid #e0e0e0; text-align: right; font-size: 14px;">
+                            {int(cat['quantity']):,}
+                        </td>
+                        <td style="padding: 12px 10px; border-bottom: 1px solid #e0e0e0; text-align: right; font-weight: bold; color: {cat['bar_color']}; font-size: 16px;">
+                            {cat['percentage']:.1f}%
+                        </td>
+                        <td style="padding: 12px 10px; border-bottom: 1px solid #e0e0e0; width: 40%;">
+                            <div style="background: #ecf0f1; border-radius: 10px; height: 20px; overflow: hidden;">
+                                <div style="background: {cat['bar_color']}; width: {bar_width}%; height: 100%; border-radius: 10px;"></div>
+                            </div>
+                        </td>
+                    </tr>
+                """
+            
+            category_section_html = f"""
+                    <div style="margin-top: 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px 10px 0 0;">
+                        <h2 style="margin: 0; color: white; font-size: 22px; text-align: center;">
+                            📊 MODEL 2: PHÂN BỔ NHU CẦU THEO NGÀNH HÀNG
+                        </h2>
+                        <p style="margin: 10px 0 0 0; color: rgba(255,255,255,0.9); text-align: center; font-size: 14px;">
+                            Dự báo xu hướng nhu cầu theo từng nhóm hàng (Category-level Trend)
+                        </p>
+                    </div>
+                    
+                    <div style="background: #ffffff; padding: 20px; border-radius: 0 0 10px 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 30px;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: #f8f9fa;">
+                                    <th style="padding: 12px 10px; text-align: left; border-bottom: 2px solid #667eea; color: #667eea; font-size: 13px; width: 25%;">Ngành hàng</th>
+                                    <th style="padding: 12px 10px; text-align: right; border-bottom: 2px solid #667eea; color: #667eea; font-size: 13px; width: 15%;">Số lượng dự báo</th>
+                                    <th style="padding: 12px 10px; text-align: right; border-bottom: 2px solid #667eea; color: #667eea; font-size: 13px; width: 15%;">Tỷ trọng</th>
+                                    <th style="padding: 12px 10px; border-bottom: 2px solid #667eea; color: #667eea; font-size: 13px; width: 45%;">Biểu đồ phân bổ</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {category_table_rows}
+                            </tbody>
+                        </table>
+                        
+                        <div style="background: #f0f3ff; border-left: 4px solid #667eea; padding: 15px; margin-top: 20px; border-radius: 4px;">
+                            <h4 style="margin: 0 0 10px 0; color: #5a67d8; font-size: 14px;">📈 Giải thích Model 2</h4>
+                            <ul style="margin: 0; padding-left: 20px; font-size: 12px; color: #555;">
+                                <li><strong>Category-level Trend:</strong> Dự báo tổng nhu cầu của từng ngành hàng thay vì từng sản phẩm</li>
+                                <li><strong>Tỷ trọng (%):</strong> Phần trăm đóng góp của mỗi ngành hàng vào tổng nhu cầu</li>
+                                <li><strong>Ứng dụng:</strong> Giúp nhà phân phối điều chỉnh tỷ lệ nhập hàng giữa các ngành</li>
+                            </ul>
+                        </div>
+                    </div>
+            """
+        else:
+            category_section_html = ""
         
         # Date range
         if 'forecast_date' in forecasts.columns:
@@ -830,6 +938,9 @@ class EmailNotifier:
                             {combined_table_html}
                         </tbody>
                     </table>
+                    
+                    <!-- MODEL 2: CATEGORY FORECAST -->
+                    {category_section_html}
                     
                     <div style="background: #e8f5e9; border-left: 4px solid #4caf50; 
                                 padding: 15px; margin: 20px 0; border-radius: 4px;">

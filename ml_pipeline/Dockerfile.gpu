@@ -23,12 +23,5 @@ RUN mkdir -p /app/models
 # Copy source code
 COPY *.py *.yaml ./
 
-# Apply GPU patch
-COPY xgboost_forecast_gpu_patch.py /tmp/
-RUN python3 /tmp/xgboost_forecast_gpu_patch.py
-
-# Verify patch
-RUN grep -q "TREE_METHOD" /app/xgboost_forecast.py && echo "✅ GPU patch applied"
-
 ENTRYPOINT ["python"]
 CMD ["xgboost_forecast.py"]

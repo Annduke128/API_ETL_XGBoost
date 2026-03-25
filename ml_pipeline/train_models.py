@@ -60,7 +60,7 @@ def main():
         logger.info("=" * 60)
         logger.info("🚀 XGBOOST FORECASTING TRAINING")
         logger.info("=" * 60)
-        logger.info(f"Tuning: {'OFF' if args.no_tuning else 'ON'}")
+        logger.info(f"Tuning: Optuna (always ON)")
         logger.info(f"Method: {args.method}")
         logger.info(f"Trials: {args.trials}")
         logger.info(f"Historical days: {args.days}")

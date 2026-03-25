@@ -2,6 +2,61 @@
 
 Tất cả các thay đổi quan trọng của dự án sẽ được ghi lại ở đây.
 
+## [Unreleased] - 2026-03-25
+
+### 🧹 Code Cleanup
+
+#### Removed Files
+- **`ml_pipeline/train_parallel.py`** - Orphan code, không được sử dụng ở bất cứ đâu
+- **`ml_pipeline/xgboost_forecast_gpu_patch.py`** - Hacky patching approach
+
+#### Added Native GPU Support
+- GPU support được tích hợp **trực tiếp** vào `xgboost_forecast.py`
+- Auto-detect GPU qua `nvidia-smi` khi `USE_GPU=true`
+- Tự động chuyển `tree_method='gpu_hist'` (GPU) hoặc `'hist'` (CPU)
+
+#### Updated Dockerfiles
+- `Dockerfile.gpu` - Bỏ bước patch, copy files trực tiếp
+- `Dockerfile` - Bỏ copy `xgboost_forecast_gpu_patch.py`
+
+### ⚡ Spark ETL Enhancements
+
+#### Auto-Move Processed Files
+- File đã xử lý tự động chuyển sang `/csv_input/processed/`
+- Tránh xử lý lại file cũ khi chạy ETL nhiều lần
+- Tự động thêm timestamp nếu file đã tồn tại ở thư mục processed
+
+#### Data Protection - Bảo vệ dữ liệu cũ
+- **⚠️ BỎ DELETE+INSERT mode** - Chỉ dùng UPSERT để đảm bảo không mất dữ liệu
+- `ON CONFLICT DO UPDATE` cho products (cập nhật nếu đã tồn tại)
+- `ON CONFLICT DO NOTHING` cho transactions (bỏ qua nếu đã tồn tại)
+- **KHÔNG BAO GIỜ TRUNCATE hoặc DELETE toàn bộ dữ liệu**
+
+#### Logging cải tiến
+- Log số records **trước** khi import
+- Log số records **sau** khi import  
+- Xác nhận rõ ràng: "DỮ LIỆU CŨ ĐƯỢC BẢO TOÀN"
+
+#### CLI Arguments
+```bash
+# UPSERT mode (default - luôn giữ dữ liệu cũ)
+python etl_main.py
+
+# Custom directories
+python etl_main.py --input-dir /data/csv --processed-dir /data/done
+```
+
+### 📝 Files Changed
+- `ml_pipeline/xgboost_forecast.py` (+native GPU support)
+- `ml_pipeline/Dockerfile`
+- `ml_pipeline/Dockerfile.gpu`
+- `ml_pipeline/train_parallel.py` (deleted)
+- `ml_pipeline/xgboost_forecast_gpu_patch.py` (deleted)
+- `spark-etl/python_etl/etl_main.py` (+auto-move, DELETE+INSERT mode, CLI args)
+- `spark-etl/python_etl/etl_main_DELETE_INSERT.py` (deleted - merged into etl_main.py)
+
+---
+
 ## [Unreleased] - 2026-03-16
 
 ### 🔧 Fixed

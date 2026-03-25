@@ -431,8 +431,8 @@ ml-train:
 	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline train_models.py --trials 50
 
 ml-fast:
-	@echo "⚡ Training ML models (no tuning)..."
-	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline train_models.py --no-tuning
+	@echo "⚡ Training ML models (quick - 10 trials)..."
+	docker-compose -f $(COMPOSE_FILE) --profile ml run --rm ml-pipeline train_models.py --trials 10
 
 ml-optimal:
 	@echo "🎯 Training ML models with 100 trials..."

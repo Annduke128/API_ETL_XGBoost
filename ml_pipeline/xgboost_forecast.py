@@ -44,6 +44,56 @@ from email_notifier import EmailNotifier, get_notifier
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# GPU SUPPORT HELPER FUNCTIONS
+# ============================================================================
+
+def get_xgboost_tree_method() -> str:
+    """
+    Xác định tree_method dựa trên environment variable USE_GPU.
+    
+    Returns:
+        str: 'gpu_hist' nếu USE_GPU=true và GPU available, 'hist' nếu không
+    """
+    use_gpu = os.environ.get('USE_GPU', 'false').lower() == 'true'
+    
+    if use_gpu:
+        try:
+            import subprocess
+            result = subprocess.run(['nvidia-smi'], capture_output=True, text=True)
+            if result.returncode == 0:
+                logger.info("🎮 GPU detected via nvidia-smi, using tree_method='gpu_hist'")
+                return 'gpu_hist'
+            else:
+                logger.warning("⚠️  USE_GPU=true but nvidia-smi failed, falling back to CPU (hist)")
+                return 'hist'
+        except Exception as e:
+            logger.warning(f"⚠️  USE_GPU=true but GPU check failed: {e}, falling back to CPU (hist)")
+            return 'hist'
+    
+    return 'hist'
+
+
+def get_xgboost_device() -> str:
+    """
+    Xác định device cho XGBoost.
+    
+    Returns:
+        str: 'cuda' nếu GPU available, 'cpu' nếu không
+    """
+    tree_method = get_xgboost_tree_method()
+    return 'cuda' if tree_method == 'gpu_hist' else 'cpu'
+
+
+# Auto-detect GPU/CPU mode
+TREE_METHOD = get_xgboost_tree_method()
+DEVICE = get_xgboost_device()
+
+if TREE_METHOD == 'gpu_hist':
+    logger.info("🚀 XGBoost GPU mode enabled (gpu_hist)")
+else:
+    logger.info("🖥️  XGBoost CPU mode (hist)")
+
 
 class SalesForecaster:
     """Dự báo doanh số bán hàng sử dụng XGBoost"""
@@ -752,7 +802,7 @@ class SalesForecaster:
                 'verbosity': 0,
                 
                 # CPU optimizations
-                'tree_method': 'hist',  # Fast histogram (CPU optimized)
+                'tree_method': TREE_METHOD,  # Auto-detected: gpu_hist for GPU, hist for CPU
                 'max_bin': 256,  # Giảm bins để tăng tốc
                 
                 # Tree structure - quan trọng nhất cho time series
@@ -942,7 +992,7 @@ class SalesForecaster:
             objective='reg:squarederror',
             random_state=42,
             n_jobs=-1,
-            tree_method='hist',
+            tree_method=TREE_METHOD,
             max_bin=256
         )
         
@@ -1972,6 +2022,19 @@ class SalesForecaster:
                 n_products = forecasts['ma_hang'].nunique() if 'ma_hang' in forecasts.columns else 0
                 logger.info(f"📧 Đang gửi email forecast report với {len(forecasts)} records, {n_products} sản phẩm...")
                 
+                # CHẠY MODEL 2: Category Trend Forecast
+                logger.info("📊 Chạy Model 2: Category Trend Forecast...")
+                try:
+                    category_forecasts = self.predict_category_trend(days=7)
+                    if not category_forecasts.empty:
+                        logger.info(f"✅ Model 2: {len(category_forecasts)} category forecasts")
+                    else:
+                        logger.warning("⚠️ Model 2: Không có dữ liệu dự báo")
+                        category_forecasts = None
+                except Exception as e:
+                    logger.error(f"❌ Lỗi khi chạy Model 2: {e}")
+                    category_forecasts = None
+                
                 # THÊM DỮ LIỆU BÁN TUẦN TRƯỚC cho email report
                 logger.info("📊 Query doanh số tuần trước cho email report...")
                 try:
@@ -2170,10 +2233,24 @@ class SalesForecaster:
                             logger.debug(f"   Could not get inventory rec for {product_code}: {e}")
                     logger.info(f"   Got {len(inventory_recs)} inventory recommendations")
                 
+                # Tạo file đơn hàng Excel đính kèm
+                logger.info("📦 Đang tạo file đơn hàng Excel...")
+                try:
+                    po_file_path = self.generate_purchase_order_excel(
+                        forecasts=forecasts,
+                        top_n=50
+                    )
+                    logger.info(f"✅ Đã tạo file đơn hàng: {po_file_path}")
+                except Exception as e:
+                    logger.error(f"❌ Lỗi khi tạo file đơn hàng: {e}")
+                    po_file_path = None
+                
                 success = self.email_notifier.send_forecast_report(
                     forecasts=forecasts,
                     inventory_recommendations=inventory_recs,
-                    model_dir=self.model_dir
+                    model_dir=self.model_dir,
+                    purchase_order_file=po_file_path,
+                    category_forecasts=category_forecasts
                 )
                 if success:
                     logger.info("✅ Đã gửi email forecast report thành công")
@@ -3090,6 +3167,129 @@ class SalesForecaster:
             logger.info(f"{row['stt']:<4} {row['ma_hang']:<10} {name_short:<26} "
                        f"{row['luong_can_nhap']:>7,} {row['ton_kho_toi_uu']:>7,} {row['ton_an_toan']:>7,} {row['ton_hien_tai']:>7,} "
                        f"{row['uu_tien']:<10}")
+        
+        return output_path
+    
+    def generate_purchase_order_excel(self, forecasts: pd.DataFrame = None, 
+                                       top_n: int = 50,
+                                       output_path: str = None) -> str:
+        """
+        Tạo file Excel (.xlsx) đơn hàng cần đặt - Đơn giản hóa cho ngưởi dùng
+        Chỉ gồm 3 cột: Tên sản phẩm, Mã vạch, Số lượng cần nhập
+        
+        Args:
+            forecasts: DataFrame dự báo (nếu None sẽ chạy predict)
+            top_n: Số sản phẩm cần đặt
+            output_path: Đường dẫn file output
+            
+        Returns:
+            Đường dẫn file Excel đã tạo
+        """
+        logger.info("=" * 60)
+        logger.info("📦 TẠO FILE ĐƠN HÀNG EXCEL")
+        logger.info("=" * 60)
+        
+        # Nếu không có forecasts thì chạy dự báo mới
+        if forecasts is None or forecasts.empty:
+            logger.info("Chưa có dữ liệu dự báo, đang chạy predict_next_week...")
+            forecasts = self.predict_next_week(use_abc_filter=True, abc_top_n=top_n)
+        
+        if forecasts.empty:
+            logger.error("❌ Không có dữ liệu dự báo để tạo đơn hàng")
+            return None
+        
+        # Lấy danh sách sản phẩm và tổng số lượng cần nhập
+        product_list = forecasts.groupby('ma_hang').agg({
+            'predicted_quantity': 'sum',
+            'ten_san_pham': 'first'
+        }).sort_values('predicted_quantity', ascending=False).head(top_n)
+        
+        # Lấy mã vạch từ PostgreSQL
+        try:
+            from sqlalchemy import text
+            ma_hang_list = product_list.index.tolist()
+            ma_hang_str = "', '".join(str(m) for m in ma_hang_list)
+            
+            with self.pg.get_connection() as conn:
+                query = f"""
+                SELECT ma_hang, ma_vach, ten_hang
+                FROM products
+                WHERE ma_hang IN ('{ma_hang_str}')
+                """
+                product_info = pd.read_sql(text(query), conn)
+                product_info = product_info.set_index('ma_hang')
+        except Exception as e:
+            logger.warning(f"⚠️ Không thể lấy mã vạch: {e}")
+            product_info = pd.DataFrame()
+        
+        # Tạo DataFrame đơn giản với 3 cột
+        simple_orders = []
+        for ma_hang, row in product_list.iterrows():
+            ten_sp = row['ten_san_pham'] if pd.notna(row['ten_san_pham']) else ''
+            if not ten_sp and ma_hang in product_info.index:
+                ten_sp = product_info.loc[ma_hang, 'ten_hang']
+            
+            ma_vach = ''
+            if ma_hang in product_info.index:
+                ma_vach = product_info.loc[ma_hang, 'ma_vach'] or ma_hang
+            else:
+                ma_vach = ma_hang
+            
+            simple_orders.append({
+                'Tên sản phẩm': ten_sp,
+                'Mã vạch': ma_vach,
+                'Số lượng cần nhập': int(row['predicted_quantity'])
+            })
+        
+        po_df = pd.DataFrame(simple_orders)
+        
+        # Tạo đường dẫn output
+        if output_path is None:
+            output_dir = '/app/output' if os.path.exists('/app/output') else os.getcwd()
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_path = os.path.join(output_dir, f'don_hang_can_nhap_{timestamp}.xlsx')
+        
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Lưu file Excel
+        try:
+            with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+                po_df.to_excel(writer, index=False, sheet_name='Đơn hàng cần nhập')
+                
+                # Format cột
+                workbook = writer.book
+                worksheet = writer.sheets['Đơn hàng cần nhập']
+                
+                # Định dạng header
+                for cell in worksheet[1]:
+                    cell.font = workbook.create_font(bold=True)
+                    cell.fill = workbook.create_fill(patternType='solid', fgColor='4472C4')
+                    cell.font = workbook.create_font(bold=True, color='FFFFFF')
+                
+                # Auto adjust column width
+                for column in worksheet.columns:
+                    max_length = 0
+                    column_letter = column[0].column_letter
+                    for cell in column:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                    adjusted_width = min(max_length + 2, 50)
+                    worksheet.column_dimensions[column_letter].width = adjusted_width
+            
+            logger.info(f"\n✅ Đã tạo file Excel đơn hàng: {output_path}")
+            logger.info(f"   - Tổng số sản phẩm: {len(po_df)}")
+            logger.info(f"   - Tổng số lượng cần nhập: {po_df['Số lượng cần nhập'].sum():,} units")
+            
+        except Exception as e:
+            logger.error(f"❌ Lỗi khi tạo file Excel: {e}")
+            # Fallback sang CSV nếu không có openpyxl
+            csv_path = output_path.replace('.xlsx', '.csv')
+            po_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+            logger.info(f"✅ Đã tạo file CSV thay thế: {csv_path}")
+            return csv_path
         
         return output_path
     

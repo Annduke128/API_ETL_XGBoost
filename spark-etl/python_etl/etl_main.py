@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
 PySpark ETL Pipeline - Logic từ data_cleaning đã chuyển sang PySpark
-- import_products: UPSERT (ON CONFLICT UPDATE), parse nhóm hàng 3 cấp
-- import_sales: UPSERT (ON CONFLICT DO NOTHING), aggregate transactions
+- import_products: UPSERT (ON CONFLICT UPDATE) - LUÔN GIỮ DỮ LIỆU CŨ
+- import_sales: UPSERT (ON CONFLICT DO NOTHING) - LUÔN GIỮ DỮ LIỆU CŨ
+- KHÔNG BAO GIỜ TRUNCATE hoặc DELETE toàn bộ dữ liệu
+- Auto-move processed files to archive directory
 """
 
 import os
 import re
+import shutil
+import argparse
 import logging
 from datetime import datetime
 import psycopg2
@@ -22,6 +26,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 CSV_INPUT = '/csv_input'
+CSV_PROCESSED = '/csv_input/processed'
+
+# Ensure processed directory exists
+os.makedirs(CSV_PROCESSED, exist_ok=True)
 
 # UDFs từ data_cleaning
 @udf(returnType=StructType([
@@ -111,6 +119,48 @@ def get_spark_session():
         .config("spark.jars", "/opt/spark/jars/postgresql-42.6.0.jar,/opt/spark/jars/clickhouse-jdbc-0.6.0-all.jar") \
         .getOrCreate()
 
+def move_to_processed(file_path):
+    """Move file đã xử lý sang thư mục processed"""
+    try:
+        filename = os.path.basename(file_path)
+        dest_path = os.path.join(CSV_PROCESSED, filename)
+        
+        # Nếu file đã tồn tại ở dest, thêm timestamp
+        if os.path.exists(dest_path):
+            name, ext = os.path.splitext(filename)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            dest_path = os.path.join(CSV_PROCESSED, f"{name}_{timestamp}{ext}")
+        
+        shutil.move(file_path, dest_path)
+        logger.info(f"   📁 Moved to: {dest_path}")
+        return True
+    except Exception as e:
+        logger.error(f"   ⚠️ Failed to move file: {e}")
+        return False
+
+def get_existing_counts():
+    """Lấy số lượng records hiện có trong database để so sánh sau import"""
+    conn = psycopg2.connect(
+        host=os.getenv('POSTGRES_HOST','postgres'),
+        database=os.getenv('POSTGRES_DB','retail_db'),
+        user=os.getenv('POSTGRES_USER','retail_user'),
+        password=os.getenv('POSTGRES_PASSWORD','retail_password')
+    )
+    conn.autocommit = True
+    
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM products")
+        products_count = cur.fetchone()[0]
+        
+        cur.execute("SELECT COUNT(*) FROM transactions")
+        transactions_count = cur.fetchone()[0]
+        
+        cur.execute("SELECT COUNT(DISTINCT ngay) FROM transactions")
+        days_count = cur.fetchone()[0]
+    
+    conn.close()
+    return {'products': products_count, 'transactions': transactions_count, 'days': days_count}
+
 def parse_date_from_filename(filename):
     match = re.search(r'KV(\d{2})(\d{2})(\d{4})', filename)
     if match:
@@ -133,6 +183,11 @@ def process_products_pyspark(spark):
         logger.warning("⚠️ No products file")
         return
     
+    # Log số lượng records trước khi import
+    existing = get_existing_counts()
+    logger.info(f"📊 [TRƯỚC IMPORT] Products: {existing['products']:,} | Transactions: {existing['transactions']:,} | Days: {existing['days']}")
+    
+    processed_files = []
     file_path = files[0]
     logger.info(f"📦 Products: {os.path.basename(file_path)}")
     
@@ -245,7 +300,7 @@ def process_products_pyspark(spark):
     conn.autocommit = True
     with conn.cursor() as cur:
         # Add inventory columns if not exist
-        cur.execute("""
+        cur.executemany("""
             ALTER TABLE products 
             ADD COLUMN IF NOT EXISTS current_stock DOUBLE PRECISION DEFAULT 0,
             ADD COLUMN IF NOT EXISTS min_stock INTEGER DEFAULT 0,
@@ -264,12 +319,12 @@ def process_products_pyspark(spark):
     conn.autocommit = True
     
     # Convert to list of tuples for upsert
-    products_data = [(row['ma_hang'], row['ten_hang'], row['cap_1'], row['cap_2'], row['cap_3'], 
-                      row['don_vi_tinh'], row['quy_doi'], row['thuong_hieu']) 
+    products_data = [(row['ma_hang'], row['ten_hang'], row.get('cap_1', ''), row.get('cap_2', ''), row.get('cap_3', ''), 
+                      row.get('don_vi_tinh', ''), row.get('quy_doi', 0), row.get('thuong_hieu', '')) 
                      for _, row in df_final.toPandas().iterrows()]
     
     with conn.cursor() as cur:
-        execute_values(cur, """
+        cur.executemany("""
             INSERT INTO products (ma_hang, ten_hang, cap_1, cap_2, cap_3, don_vi_tinh, quy_doi, thuong_hieu)
             VALUES %s
             ON CONFLICT (ma_hang) DO UPDATE SET
@@ -283,7 +338,14 @@ def process_products_pyspark(spark):
         """, products_data)
     
     conn.close()
-    logger.info(f"   ✅ UPSERTED {count} products")
+    logger.info(f"   ✅ UPSERTED {count} products (chỉ thêm mới/cập nhật, KHÔNG xóa dữ liệu cũ)")
+    
+    # Log số lượng sau khi import
+    after = get_existing_counts()
+    logger.info(f"📊 [SAU IMPORT] Products: {after['products']:,} (+{after['products'] - existing['products']:,}) | Transactions: {after['transactions']:,} | Days: {after['days']}")
+    
+    # Move file đã xử lý sang processed
+    move_to_processed(file_path)
 
 def process_sales_pyspark(spark):
     import glob
@@ -291,6 +353,10 @@ def process_sales_pyspark(spark):
     if not files:
         logger.warning("⚠️ No sales files")
         return
+    
+    # Log số lượng records trước khi import
+    existing = get_existing_counts()
+    logger.info(f"📊 [TRƯỚC IMPORT] Products: {existing['products']:,} | Transactions: {existing['transactions']:,} | Days: {existing['days']}")
     
     for file_path in files:
         filename = os.path.basename(file_path)
@@ -379,8 +445,12 @@ def process_sales_pyspark(spark):
             "driver": "org.postgresql.Driver"
         }
         
-        # UPSERT transactions để tránh duplicate
-        logger.info("   🔄 UPSERT transactions...")
+        # Chuyển trans_agg sang list
+        trans_data = [(row['ma_giao_dich'], row['ma_chi_nhanh'], row['ngay']) 
+                      for _, row in trans_agg.toPandas().iterrows()]
+        
+        # ⚠️ LUÔN DÙNG UPSERT - KHÔNG BAO GIỜ XÓA DỮ LIỆU CŨ
+        logger.info("   🔄 UPSERT transactions (giữ nguyên dữ liệu cũ, chỉ thêm mới)...")
         
         conn = psycopg2.connect(
             host=os.getenv('POSTGRES_HOST','postgres'),
@@ -390,20 +460,15 @@ def process_sales_pyspark(spark):
         )
         conn.autocommit = True
         
-        # Chuyển trans_agg sang list
-        trans_data = [(row['ma_giao_dich'], row['ma_chi_nhanh'], row['ngay']) 
-                      for _, row in trans_agg.toPandas().iterrows()]
-        
         with conn.cursor() as cur:
-            # UPSERT transactions
-            execute_values(cur, """
+            cur.executemany("""
                 INSERT INTO transactions (ma_giao_dich, chi_nhanh_id, thoi_gian)
                 VALUES (%s, (SELECT id FROM branches WHERE ma_chi_nhanh = %s LIMIT 1), %s)
                 ON CONFLICT (ma_giao_dich, thoi_gian) DO NOTHING
             """, trans_data)
         
         conn.close()
-        logger.info("   ✅ UPSERTED transactions")
+        logger.info("   ✅ UPSERTED transactions (KHÔNG xóa dữ liệu cũ)")
         
         # Đọc lại transactions để lấy transaction_id
         trans_mapping = spark.read.jdbc(pg_url, "transactions", properties=pg_props).select("id", "ma_giao_dich")
@@ -423,11 +488,46 @@ def process_sales_pyspark(spark):
         logger.info(f"   📊 After dedup: {final_count} details (removed {details_count - final_count} duplicates)")
         
         details_final.write.jdbc(pg_url, "transaction_details", mode="append", properties=pg_props)
-        logger.info(f"   ✅ {trans_count} trans, {details_count} details")
+        logger.info(f"   ✅ {trans_count} trans, {details_count} details (append mode, giữ dữ liệu cũ)")
+        
+        # Move file đã xử lý sang processed
+        move_to_processed(file_path)
+    
+    # Log số lượng sau khi import tất cả files
+    after = get_existing_counts()
+    logger.info(f"📊 [SAU IMPORT] Products: {after['products']:,} | Transactions: {after['transactions']:,} (+{after['transactions'] - existing['transactions']:,}) | Days: {after['days']}")
+    logger.info("✅ DỮ LIỆU CŨ ĐƯỢC BẢO TOÀN - KHÔNG CÓ RECORDS NÀO BỊ XÓA")
 
 def main():
+    parser = argparse.ArgumentParser(
+        description='PySpark ETL Pipeline for Retail Data - LUÔN GIỮ DỮ LIỆU CŨ'
+    )
+    parser.add_argument(
+        '--input-dir',
+        type=str,
+        default='/csv_input',
+        help='Thư mục chứa file CSV/Excel đầu vào (default: /csv_input)'
+    )
+    parser.add_argument(
+        '--processed-dir',
+        type=str,
+        default='/csv_input/processed',
+        help='Thư mục lưu file đã xử lý (default: /csv_input/processed)'
+    )
+    
+    args = parser.parse_args()
+    
+    # Cập nhật đường dẫn nếu được chỉ định
+    global CSV_INPUT, CSV_PROCESSED
+    CSV_INPUT = args.input_dir
+    CSV_PROCESSED = args.processed_dir
+    os.makedirs(CSV_PROCESSED, exist_ok=True)
+    
     logger.info("="*60)
-    logger.info("🚀 PySpark ETL - Logic from data_cleaning")
+    logger.info("🚀 PySpark ETL - LUÔN GIỮ DỮ LIỆU CŨ")
+    logger.info("   Mode: UPSERT ONLY (không bao giờ TRUNCATE hoặc DELETE)")
+    logger.info(f"   Input: {CSV_INPUT}")
+    logger.info(f"   Processed: {CSV_PROCESSED}")
     logger.info("="*60)
     
     spark = get_spark_session()
@@ -435,7 +535,7 @@ def main():
         process_products_pyspark(spark)  # Includes inventory data from DanhSachSanPham
         process_sales_pyspark(spark)
         logger.info("="*60)
-        logger.info("✅ Complete!")
+        logger.info("✅ Complete! Dữ liệu cũ được bảo toàn.")
     except Exception as e:
         logger.error(f"❌ Error: {e}")
         raise

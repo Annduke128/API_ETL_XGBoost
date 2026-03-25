@@ -1,0 +1,18 @@
+# Dockerfile cho sync-tool (PostgreSQL → ClickHouse)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Cài đặt dependencies
+RUN pip install --no-cache-dir \
+    pandas==2.1.4 \
+    numpy==1.26.3 \
+    sqlalchemy==2.0.25 \
+    psycopg2-binary==2.9.9 \
+    clickhouse-driver==0.2.6
+
+# Copy sync script
+COPY python_udfs/sync_to_clickhouse.py /app/
+
+# Default command
+CMD ["python", "sync_to_clickhouse.py"]

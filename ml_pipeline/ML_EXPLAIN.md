@@ -118,15 +118,53 @@ Ví dụ: Black Friday có doanh số cao hơn 42% → seasonal_factor = 1.42
 
 ## Metrics & Evaluation
 
-### Model 1: MdAPE (Median Absolute Percentage Error)
+Hệ thống sử dụng **chiến lược đa góc nhìn (3 metrics)** để đánh giá model một cách toàn diện:
+
+### 1. MAE (Mean Absolute Error)
+
+```
+MAE = mean(|actual - predicted|)
+```
+
+**Ý nghĩa**: Trung bình mỗi ngày kho bị dư/thiếu bao nhiêu đơn vị sản phẩm.
+
+| MAE | Đánh giá |
+|-----|----------|
+| < 5 | Rất tốt |
+| 5-15 | Tốt |
+| 15-30 | Chấp nhận được |
+| > 30 | Cần cải thiện |
+
+### 2. WMAPE (Weighted Mean Absolute Percentage Error) ⭐
+
+```
+WMAPE = Σ|actual - predicted| / Σactual × 100%
+```
+
+**Tại sao WMAPE là metric an toàn nhất?**
+- Không bị ảnh hưởng bởi outliers như MAPE
+- Đánh giá sai số phần trăm tổng thể (weighted by actual values)
+- Phù hợp cho inventory planning
+
+**Interpretation**:
+| WMAPE | Đánh giá |
+|-------|----------|
+| < 10% | Xuất sắc |
+| 10-20% | Rất tốt |
+| 20-30% | Tốt |
+| 30-40% | Chấp nhận được |
+| > 40% | Cần cải thiện |
+
+### 3. MdAPE (Median Absolute Percentage Error)
 
 ```
 MdAPE = median(|(actual - predicted) / actual|) × 100
 ```
 
-**Tại sao dùng MdAPE thay MAPE?**
-- MdAPE ít nhạy với outliers hơn MAPE
-- Phù hợp khi có sản phẩm bán rất ít (gần 0)
+**Tại sao dùng MdAPE?**
+- 50% ngày có sai số dưới ngưỡng này
+- Ít nhạy với outliers hơn MAPE
+- Phù hợp để phát hiện ngày bị sai số đột biến
 
 **Interpretation**:
 | MdAPE | Đánh giá |
@@ -136,13 +174,39 @@ MdAPE = median(|(actual - predicted) / actual|) × 100
 | 20-30% | Chấp nhận được |
 | > 30% | Cần cải thiện |
 
-### Model 2: MAPE (Mean Absolute Percentage Error)
+### 4. MAPE (Mean Absolute Percentage Error) - Tham khảo
 
 ```
 MAPE = mean(|(actual - predicted) / actual|) × 100
 ```
 
-**Lý do**: Category-level ít outliers hơn product-level.
+**Lưu ý**: MAPE có thể bị outliers ảnh hưởng mạnh, chỉ dùng để tham khảo.
+
+### Chiến lược đa góc nhìn trong Training
+
+**Trong quá trình tối ưu (Optuna)**:
+- Vẫn tiếp tục sử dụng Log-Transform + MSE để hội tụ mượt mà
+- Tự động khắc phục các điểm dị biệt (outliers)
+
+**Trong quá trình đánh giá (Validation/Reporting)**:
+- In ra cả 3 chỉ số: MAE, WMAPE, MdAPE
+- Mỗi metric cho một góc nhìn khác nhau về chất lượng dự báo
+
+**Ví dụ output**:
+```
+📊 VALIDATION METRICS (3 chỉ số đa góc nhìn):
+   📏 MAE:    12.35      ← Trung bình mỗi ngày kho bị dư/thiếu (đơn vị)
+   📊 WMAPE:  8.52%      ← Sai số phần trăm tổng thể (an toàn nhất)
+   📈 MdAPE:  6.21%      ← 50% ngày sai số dưới ngưỡng này
+   📉 MAPE:   15.73%     ← Tham khảo (có thể bị outliers ảnh hưởng)
+```
+
+### Model-specific Metrics
+
+| Model | Primary Metric | Secondary Metrics |
+|-------|---------------|-------------------|
+| **Model 1** (Product-level) | MdAPE | MAE, WMAPE, MAPE |
+| **Model 2** (Category-level) | MAPE | MAE, WMAPE, MdAPE |
 
 ---
 
@@ -711,24 +775,57 @@ Hệ thống tự động tạo đơn đặt hàng dựa trên:
 2. **Tồn kho hiện tại** (từ ClickHouse)
 3. **Tỉ lệ quy đổi** (từ cột Quy đổi trong Excel)
 
-### Công thức tính toán
+### Công thức tính toán (Cập nhật 2026-03-18)
 
+#### 1. Tồn kho an toàn (Safety Stock)
+
+**Công thức:**
 ```
-Công thức:
-    Nhu cầu = MAX(Dự báo 7 ngày, Tồn nhỏ nhất)
-    Cần nhập = Nhu cầu - Tồn kho hiện tại
-    
-Làm tròn theo quy cách:
-    Đơn đặt hàng = ROUND_UP(Cần nhập / Quy đổi) × Quy đổi
+Safety Stock = (Nhu cầu cao nhất × Lead time max) - (Nhu cầu TB × Lead time TB)
 ```
 
-### Ví dụ minh họa
+**Trong đó:**
+- **Nhu cầu cao nhất**: Max daily demand trong 28 ngày gần nhất
+- **Nhu cầu TB**: Average daily demand trong 28 ngày gần nhất
+- **Lead time max**: Thờigian giao hàng tối đa (mặc định: 7 ngày)
+- **Lead time TB**: Thờigian giao hàng trung bình (mặc định: 5 ngày)
 
-| Sản phẩm | Dự báo 7 ngày | Tồn hiện tại | Cần nhập | Quy đổi | Đơn đặt hàng |
-|----------|---------------|--------------|----------|---------|--------------|
-| Cốc giấy đỏ (lẻ) | 125 cái | 10 cái | 115 cái | 1 | **115 cái** |
-| Cốc giấy đỏ (lốc) | 125 cái | 10 cái | 115 cái | 50 | **150 cái** (3 lốc) |
-| Cốc giấy đỏ (thùng) | 125 cái | 10 cái | 115 cái | 1200 | **1200 cái** (1 thùng) |
+**Ví dụ:**
+- Max daily demand: 50 cái/ngày
+- Avg daily demand: 30 cái/ngày
+- Safety Stock = (50 × 7) - (30 × 5) = **200 cái**
+
+#### 2. Tồn kho tối ưu (Optimal Inventory)
+
+```
+Tồn kho tối ưu = median(lượng bán tuần + tồn nhỏ nhất × 0.75) qua 4 tuần
+```
+
+#### 3. Lượng cần nhập
+
+```
+Lượng cần nhập = MAX(Dự báo 7 ngày, Tồn kho tối ưu + Safety Stock) - Tồn kho hiện tại
+
+Làm tròn: Đơn đặt hàng = ROUND_UP(Cần nhập / Quy đổi) × Quy đổi
+```
+
+### Tham số
+
+| Tham số | Mặc định | Mô tả |
+|---------|----------|-------|
+| `lead_time_max` | 7 ngày | Lead time tối đa |
+| `lead_time_avg` | 5 ngày | Lead time trung bình |
+| `top_n` | 50 | Số sản phẩm cần đặt |
+
+### Cách sử dụng
+
+```python
+# Mặc định
+forecaster.generate_purchase_order_csv()
+
+# Tùy chỉnh lead time
+forecaster.generate_purchase_order_csv(lead_time_max=10, lead_time_avg=6)
+```
 
 ### Logic quy cách
 
@@ -751,4 +848,4 @@ File `BaoCaoXuatNhapTon_*.xlsx` được import **trực tiếp** vào ClickHous
 
 ---
 
-*Last updated: 2026-03-16*
+*Last updated: 2026-03-18 (Added Safety Stock)*

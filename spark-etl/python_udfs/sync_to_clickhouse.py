@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Sync enriched data from PostgreSQL to ClickHouse
-Optimized version sử dụng batch processing
+Optimized version sử dụng batch processing với DEDUPLICATION
 """
 
 import pandas as pd
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class ClickHouseSync:
-    """Sync data từ PostgreSQL sang ClickHouse với batch optimization"""
+    """Sync data từ PostgreSQL sang ClickHouse với batch optimization và dedup"""
     
     def __init__(self):
         self.pg_engine = self._get_postgres_engine()
@@ -51,9 +51,20 @@ class ClickHouseSync:
             password=password
         )
     
+    def truncate_clickhouse_table(self, ch_table: str):
+        """Truncate ClickHouse table trước khi sync"""
+        try:
+            self.ch_client.execute(f"TRUNCATE TABLE {ch_table}")
+            logger.info(f"   🗑️  Truncated {ch_table}")
+        except Exception as e:
+            logger.warning(f"   ⚠️  Could not truncate {ch_table}: {e}")
+    
     def sync_table(self, pg_table: str, ch_table: str, batch_size: int = 50000) -> int:
         """Sync một bảng từ PostgreSQL sang ClickHouse"""
         logger.info(f"Syncing {pg_table} -> {ch_table}")
+        
+        # TRUNCATE ClickHouse table trước
+        self.truncate_clickhouse_table(ch_table)
         
         # Get total count
         with self.pg_engine.connect() as conn:
@@ -119,14 +130,33 @@ class ClickHouseSync:
         
         # Handle NULL values
         for col in df.columns:
+            # Check if column has any NULL/NaN values
+            has_null = df[col].isna().any()
+            
             if df[col].dtype == 'object':
+                # Object columns: convert NULL to empty string
                 df[col] = df[col].fillna('').astype(str)
             elif pd.api.types.is_integer_dtype(df[col]):
+                # Integer columns: convert NULL to 0
                 df[col] = df[col].fillna(0).astype(int)
             elif pd.api.types.is_float_dtype(df[col]):
-                df[col] = df[col].fillna(0.0).astype(float)
+                # Check if this might be a string column with NaN
+                if has_null and df[col].dropna().apply(lambda x: isinstance(x, str)).any():
+                    # This is actually a string column with NaN values
+                    df[col] = df[col].fillna('').astype(str)
+                else:
+                    # True float column
+                    df[col] = df[col].fillna(0.0).astype(float)
             elif pd.api.types.is_datetime64_any_dtype(df[col]):
+                # Datetime columns: convert NULL to current timestamp
                 df[col] = df[col].fillna(pd.Timestamp.now())
+            else:
+                # For any other type, convert to string to be safe
+                if has_null:
+                    df[col] = df[col].fillna('').astype(str)
+        
+        # Additional safety: ensure no NaN values remain
+        df = df.where(pd.notna(df), '')
         
         return df
     
@@ -143,8 +173,7 @@ class ClickHouseSync:
         CREATE TABLE IF NOT EXISTS {table_name} (
             {columns_sql}
         ) ENGINE = MergeTree()
-        ORDER BY (ngay, chi_nhanh, ma_hang)
-        PARTITION BY toYYYYMM(ngay)
+        ORDER BY (id)
         """
         
         self.ch_client.execute(create_sql)
@@ -173,12 +202,13 @@ class ClickHouseSync:
     def run_full_sync(self):
         """Sync all tables"""
         logger.info("="*60)
-        logger.info("PostgreSQL → ClickHouse Sync")
+        logger.info("PostgreSQL → ClickHouse Sync (with DEDUPLICATION)")
         logger.info("="*60)
         
         tables = [
-            ('staging_raw_transactions', 'fact_transactions'),
             ('products', 'staging_products'),
+            ('transactions', 'staging_transactions'),
+            ('transaction_details', 'staging_transaction_details'),
             ('branches', 'staging_branches'),
         ]
         

@@ -21,7 +21,6 @@ COPY db_connectors.py .
 COPY email_notifier.py .
 COPY pipeline_monitor.py .
 COPY train_models.py .
-COPY xgboost_forecast_gpu_patch.py .
 COPY *.yaml .
 
 # Copy xgboost_forecast.py SAU CÙNG (quan trọng nhất)

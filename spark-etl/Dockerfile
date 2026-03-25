@@ -36,7 +36,7 @@ RUN mkdir -p /opt/spark/jars && \
 ENV SPARK_HOME=/usr/local/lib/python3.11/site-packages/pyspark
 ENV PYSPARK_PYTHON=python3
 ENV PYSPARK_DRIVER_PYTHON=python3
-ENV PYTHONPATH=/opt/spark/python:$PYTHONPATH
+ENV PYTHONPATH=/opt/spark/python:/usr/local/lib/python3.11/site-packages
 
 # Copy PySpark ETL scripts
 COPY python_etl /opt/spark/python_etl

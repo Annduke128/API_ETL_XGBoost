@@ -30,11 +30,32 @@ spec:
             --lastname User \
             --email admin@hasu.com \
             --password admin || true
-        envFrom:
-        - configMapRef:
-            name: hasu-ml-config
-        - secretRef:
-            name: hasu-ml-secrets
+        env:
+        # Security
+        - name: SUPERSET_SECRET_KEY
+          value: "2L2Yc5wTf9pLmN3QxR7vKaJ4HbGdEfUjCiSn8mAkPlYsWqX1Zo"
+        # Database connection cho init
+        - name: DATABASE_HOST
+          value: "superset-db"
+        - name: DATABASE_PORT
+          value: "5432"
+        - name: DATABASE_USER
+          value: "superset"
+        - name: DATABASE_PASSWORD
+          value: "superset"
+        - name: DATABASE_DB
+          value: "superset"
+        - name: SQLALCHEMY_DATABASE_URI
+          value: "postgresql://superset:superset@superset-db:5432/superset"
+        - name: SUPERSET_ENV
+          value: "production"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
       containers:
       - name: superset
         image: apache/superset:3.0.0
@@ -47,8 +68,39 @@ spec:
         - secretRef:
             name: hasu-ml-secrets
         env:
+        - name: SUPERSET_SECRET_KEY
+          value: "2L2Yc5wTf9pLmN3QxR7vKaJ4HbGdEfUjCiSn8mAkPlYsWqX1Zo"
         - name: SUPERSET_ENV
           value: "production"
+        - name: SUPERSET_PORT
+          value: "8088"
+        # Database connection (trực tiếp vì envFrom không hoạt động đúng)
+        - name: DATABASE_HOST
+          value: "superset-db"
+        - name: DATABASE_PORT
+          value: "5432"
+        - name: DATABASE_USER
+          value: "superset"
+        - name: DATABASE_PASSWORD
+          value: "superset"
+        - name: DATABASE_DB
+          value: "superset"
+        - name: SQLALCHEMY_DATABASE_URI
+          value: "postgresql://superset:superset@superset-db:5432/superset"
+        # Redis
+        - name: REDIS_HOST
+          value: "superset-cache"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: CACHE_REDIS_URL
+          value: "redis://superset-cache:6379/1"
+        # Override các biến tự động từ K8s service
+        - name: SUPERSET_SERVICE_PORT
+          value: "8088"
+        - name: CLICKHOUSE_HOST
+          value: "clickhouse.hasu-ml.svc.cluster.local"
+        - name: CLICKHOUSE_PORT
+          value: "9000"
         resources:
           requests:
             memory: "512Mi"
