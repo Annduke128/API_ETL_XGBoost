@@ -21,6 +21,7 @@
 - 🧹 **Code Cleanup**: Xóa `train_parallel.py` (orphan code) và `xgboost_forecast_gpu_patch.py` (hacky approach)
 - 📁 **Spark ETL Auto-Move**: File đã xử lý tự động chuyển sang `/csv_input/processed/`
 - 🛡️ **Data Protection**: Spark ETL chỉ dùng UPSERT, **KHÔNG BAO GIỜ** xóa dữ liệu cũ
+- 🐛 **Fixed Week Calculation**: Sửa `toWeek()` → `toWeek(..., 1)` cho Monday-based week (fix lỗi "Bán tuần qua" trong email report)
 
 ---
 

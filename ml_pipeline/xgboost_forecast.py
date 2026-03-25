@@ -262,7 +262,7 @@ class SalesForecaster:
             toDayOfWeek(f.transaction_date) as day_of_week,
             toDayOfMonth(f.transaction_date) as day_of_month,
             toMonth(f.transaction_date) as month,
-            toWeek(f.transaction_date) as week_of_year,
+            toWeek(f.transaction_date, 1) as week_of_year,
             toDayOfWeek(f.transaction_date) IN (6, 7) as is_weekend,
             toDayOfMonth(f.transaction_date) = 1 as is_month_start,
             toDayOfMonth(f.transaction_date) = toDayOfMonth(toLastDayOfMonth(f.transaction_date)) as is_month_end,
@@ -421,7 +421,7 @@ class SalesForecaster:
             toDayOfWeek(f.transaction_date) as day_of_week,
             toDayOfMonth(f.transaction_date) as day_of_month,
             toMonth(f.transaction_date) as month,
-            toWeek(f.transaction_date) as week_of_year,
+            toWeek(f.transaction_date, 1) as week_of_year,
             toDayOfWeek(f.transaction_date) IN (6, 7) as is_weekend,
             toDayOfMonth(f.transaction_date) = 1 as is_month_start,
             toDayOfMonth(f.transaction_date) = toDayOfMonth(toLastDayOfMonth(f.transaction_date)) as is_month_end,
@@ -511,7 +511,7 @@ class SalesForecaster:
             toDayOfWeek(f.transaction_date) as day_of_week,
             toDayOfMonth(f.transaction_date) as day_of_month,
             toMonth(f.transaction_date) as month,
-            toWeek(f.transaction_date) as week_of_year,
+            toWeek(f.transaction_date, 1) as week_of_year,
             toDayOfWeek(f.transaction_date) IN (6, 7) as is_weekend,
             toDayOfMonth(f.transaction_date) = 1 as is_month_start,
             toDayOfMonth(f.transaction_date) = toDayOfMonth(toLastDayOfMonth(f.transaction_date)) as is_month_end,
@@ -2046,7 +2046,7 @@ class SalesForecaster:
                     current_week_query = """
                     SELECT DISTINCT
                         toYear(transaction_date) as year,
-                        toWeek(transaction_date) as week
+                        toWeek(transaction_date, 1) as week
                     FROM retail_dw.fct_regular_sales
                     ORDER BY year DESC, week DESC
                     LIMIT 2
@@ -2073,7 +2073,7 @@ class SalesForecaster:
                     
                     # Query theo tuần hoặc 7 ngày gần nhất
                     if last_week is not None:
-                        # Query theo tuần (từ thứ 2 đến chủ nhật tuần trước)
+                        # Query theo tuần (từ thứ 2 đến chủ nhật tuần trước) - dùng toWeek(..., 1) cho Monday-based week
                         last_week_query = f"""
                         SELECT 
                             f.product_code as ma_hang,
@@ -2081,7 +2081,7 @@ class SalesForecaster:
                         FROM retail_dw.fct_regular_sales f
                         WHERE f.product_code IN ('{products_str}')
                           AND toYear(f.transaction_date) = {last_year}
-                          AND toWeek(f.transaction_date) = {last_week}
+                          AND toWeek(f.transaction_date, 1) = {last_week}
                         GROUP BY f.product_code
                         """
                         logger.info(f"   Query tuần {last_year}-W{last_week:02d}")
@@ -2363,7 +2363,7 @@ class SalesForecaster:
             toDayOfWeek(f.transaction_date) as day_of_week,
             toDayOfMonth(f.transaction_date) as day_of_month,
             toMonth(f.transaction_date) as month,
-            toWeek(f.transaction_date) as week_of_year,
+            toWeek(f.transaction_date, 1) as week_of_year,
             toDayOfWeek(f.transaction_date) IN (6, 7) as is_weekend,
             multiIf(
                 (toMonth(f.transaction_date) = 1 AND toDayOfMonth(f.transaction_date) <= 5), true,
@@ -2385,7 +2385,7 @@ class SalesForecaster:
             toDayOfWeek(f.transaction_date),
             toDayOfMonth(f.transaction_date),
             toMonth(f.transaction_date),
-            toWeek(f.transaction_date),
+            toWeek(f.transaction_date, 1),
             is_weekend,
             is_holiday
         ORDER BY p.category_level_1, f.transaction_date
@@ -2934,13 +2934,13 @@ class SalesForecaster:
             weekly_sales_query = f"""
             SELECT 
                 product_code as ma_hang,
-                toWeek(transaction_date) as week_num,
+                toWeek(transaction_date, 1) as week_num,
                 SUM(quantity_sold) as weekly_sold,
                 SUM(gross_revenue) as weekly_revenue
             FROM retail_dw.fct_regular_sales
             WHERE product_code IN ('{products_str}')
               AND transaction_date >= today() - 28
-            GROUP BY product_code, toWeek(transaction_date)
+            GROUP BY product_code, toWeek(transaction_date, 1)
             ORDER BY product_code, week_num
             """
             weekly_df = self.ch.query(weekly_sales_query)
@@ -3548,7 +3548,7 @@ class SalesForecaster:
                     # Lấy tuần mới nhất có dữ liệu để tính "tuần trước" chính xác
                     current_week_query = """
                     SELECT 
-                        toWeek(MAX(transaction_date)) as current_week,
+                        toWeek(MAX(transaction_date), 1) as current_week,
                         toYear(MAX(transaction_date)) as current_year
                     FROM retail_dw.fct_regular_sales
                     """
@@ -3565,11 +3565,11 @@ class SalesForecaster:
                             last_year = current_year
                         logger.info(f"   Tuần hiện tại: {current_year}-W{current_week:02d}, Tuần trước: {last_year}-W{last_week:02d}")
                     else:
-                        last_week = "toWeek(today()) - 1"
+                        last_week = "toWeek(today(), 1) - 1"
                         last_year = "toYear(today())"
                         logger.warning("   Không lấy được tuần dữ liệu, dùng toWeek(today()) - 1")
                     
-                    # Query theo tuần (từ thứ 2 đến chủ nhật tuần trước)
+                    # Query theo tuần (từ thứ 2 đến chủ nhật tuần trước) - dùng toWeek(..., 1) cho Monday-based week
                     last_week_query = f"""
                     SELECT 
                         f.product_code as ma_hang,
@@ -3578,7 +3578,7 @@ class SalesForecaster:
                     FROM retail_dw.fct_regular_sales f
                     WHERE f.product_code IN ('{products_str}')
                       AND toYear(f.transaction_date) = {last_year}
-                      AND toWeek(f.transaction_date) = {last_week}
+                      AND toWeek(f.transaction_date, 1) = {last_week}
                     GROUP BY f.product_code
                     """
                     last_week_df = self.ch.query(last_week_query)
