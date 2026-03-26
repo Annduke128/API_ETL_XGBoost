@@ -956,7 +956,7 @@ class EmailNotifier:
                                 padding: 15px; margin: 20px 0; border-radius: 4px;">
                         <h4 style="margin: 0 0 10px 0; color: #2e7d32;">💡 Hướng dẫn đọc bảng</h4>
                         <ul style="margin: 0; padding-left: 20px; font-size: 12px; color: #555;">
-                            <li><strong>Bán tuần qua:</strong> Số lượng bán thực tế 7 ngày gần nhất</li>
+                            <li><strong>Bán tuần qua:</strong> Số lượng bán thực tế tuần trước (7 ngày: Thứ 2-CN)</li>
                             <li><strong>Xu hướng:</strong> % thay đổi so với tuần trước (📈 tăng, 📉 giảm, ➡️ ổn định)</li>
                             <li><strong>Tồn kho tối ưu:</strong> Mức tồn kho an toàn để tránh hết hàng (1.5x dự báo 2 tuần)</li>
                             <li><strong>Logic đặt hàng:</strong> Nếu Safety Stock < Tồn tối thiểu → Đặt = Min - SS<br>
