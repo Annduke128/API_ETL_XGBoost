@@ -2185,17 +2185,16 @@ class SalesForecaster:
                         
                         logger.info(f"   📊 Còn lại {len(forecasts)}/{original_count} sản phẩm sau khi lọc")
                     
-                    # 3. Query tồn kho nhỏ nhất (ton_kho_nho_nhat)
+                    # 3. Query tồn kho hiện tại (mới nhất)
                     inventory_query = f"""
                     SELECT 
                         p.product_code as ma_hang,
-                        MIN(i.ton_kho) as ton_kho_nho_nhat
+                        argMax(i.stock_quantity, i.snapshot_date) as ton_kho_nho_nhat
                     FROM retail_dw.dim_product p
                     LEFT JOIN (
-                        SELECT product_code, MIN(stock_quantity) as ton_kho
+                        SELECT product_code, stock_quantity, snapshot_date
                         FROM retail_dw.staging_inventory_transactions
                         WHERE snapshot_date >= today() - INTERVAL 7 DAY
-                        GROUP BY product_code
                     ) i ON p.product_code = i.product_code
                     WHERE p.product_code IN ('{products_str}')
                     GROUP BY p.product_code
@@ -3140,9 +3139,11 @@ class SalesForecaster:
         
         # 4. Tổng hợp dự báo theo sản phẩm (14 ngày = 2 tuần)
         product_summary = forecasts.groupby(['ma_hang', 'ten_san_pham']).agg({
-            'predicted_quantity': 'sum'
+            'predicted_quantity': 'sum',
+            'last_week_sales': 'first',
+            'ton_kho_nho_nhat': 'first'
         }).reset_index()
-        product_summary.columns = ['ma_hang', 'ten_san_pham', f'forecast_{forecast_days}d']
+        product_summary.columns = ['ma_hang', 'ten_san_pham', f'forecast_{forecast_days}d', 'last_week_sales', 'ton_kho_nho_nhat']
         forecast_col = f'forecast_{forecast_days}d'
         
         # 5. Thêm các thông tin bổ sung
@@ -3166,29 +3167,13 @@ class SalesForecaster:
             lambda x: product_info.get(x, {}).get('margin', 0))
         
         # 6. Tính LƯỢNG CẦN NHẬP
-        # Logic mới: So sánh Safety Stock với Tồn kho tối thiểu
-        # - Nếu ton_an_toan < ton_nho_nhat: lượng cần nhập = ton_nho_nhat - ton_an_toan
-        # - Nếu ton_an_toan >= ton_nho_nhat: MAX(Dự báo 14 ngày, Tồn kho tối ưu + Tồn kho an toàn) - Tồn kho hiện tại
-        product_summary['tong_ton_kho_muc_tieu'] = (
-            product_summary['ton_kho_toi_uu'] + product_summary['ton_an_toan']
-        )
-        
-        # So sánh Safety Stock với Tồn kho tối thiểu
-        def calculate_order_quantity(row):
-            ss = row['ton_an_toan']  # Safety Stock
-            min_stock = row['ton_nho_nhat']  # Tồn kho tối thiểu
-            forecast = row[forecast_col]
-            target = row['tong_ton_kho_muc_tieu']
-            current = row['ton_hien_tai']
-            
-            # Nếu Safety Stock < Tồn kho tối thiểu
-            if ss < min_stock:
-                return max(0, min_stock - ss)
-            else:
-                # Công thức bình thường: MAX(Dự báo, Target) - Tồn kho hiện tại
-                return max(0, max(forecast, target) - current)
-        
-        product_summary['luong_can_nhap'] = product_summary.apply(calculate_order_quantity, axis=1)
+        # Unified formula: forecast_14_days * 1.5 - last_week_sales - ton_kho
+        # Đồng bộ với email notifier
+        product_summary['luong_can_nhap'] = (
+            product_summary[forecast_col] * 1.5 
+            - product_summary['last_week_sales'] 
+            - product_summary['ton_kho_nho_nhat']
+        ).clip(lower=0).round()
         
         # 7. SẮP XẾP ƯU TIÊN
         # Primary: Lượng cần nhập (nhiều nhất = cần gấp nhất)

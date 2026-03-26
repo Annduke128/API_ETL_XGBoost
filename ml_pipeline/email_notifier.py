@@ -652,6 +652,9 @@ class EmailNotifier:
                 # Số lượng bán 1 tuần qua (last_week_sales)
                 last_week_sales = float(group['last_week_sales'].iloc[0]) if 'last_week_sales' in group.columns else 0
                 
+                # Tồn kho nhỏ nhất (ton_kho_nho_nhat)
+                ton_kho = float(group['ton_kho_nho_nhat'].iloc[0]) if 'ton_kho_nho_nhat' in group.columns else 0
+                
                 # Tính xu hướng (tăng/giảm)
                 if last_week_sales > 0:
                     trend_pct = ((forecast_next_week - last_week_sales) / last_week_sales) * 100
@@ -700,9 +703,9 @@ class EmailNotifier:
                     # Cap optimal_stock để tránh giá trị quá cao do outliers
                     optimal_stock = min(optimal_stock, 5000)
                     
-                    # Suggested order = dự báo 14 ngày * 1.5 - bán tuần trước
-                    # Unified formula: forecast * 1.5 - last_week (ton_kho not available in email context)
-                    suggested_order = max(0, round(forecast_next_week * 1.5 - last_week_sales))
+                    # Suggested order = dự báo 14 ngày * 1.5 - bán tuần trước - tồn kho
+                    # Unified formula: forecast * 1.5 - last_week - ton_kho
+                    suggested_order = max(0, round(forecast_next_week * 1.5 - last_week_sales - ton_kho))
                 
                 product_data.append({
                     'code': product_code,
