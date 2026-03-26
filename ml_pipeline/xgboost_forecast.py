@@ -1768,8 +1768,13 @@ class SalesForecaster:
                 (history_df['ma_hang'] == product)
             ].sort_values('ngay').reset_index(drop=True)
             
-            # COLD START HANDLING: Nếu ít hơn 2 ngày dữ liệu, dùng category median
-            if len(product_history) < 2:
+            # COLD START HANDLING: 
+            # 1. Nếu ít hơn 2 ngày dữ liệu
+            # 2. Hoặc ít hơn 7 ngày và tất cả đều có cùng giá trị (dữ liệu đồng nhất bất thường - có thể là outliers)
+            is_uniform_outlier = (len(product_history) < 7 and product_history['daily_quantity'].nunique() == 1)
+            if len(product_history) < 2 or is_uniform_outlier:
+                if is_uniform_outlier:
+                    logger.warning(f"   ⚠️ Uniform outlier detected: {product} has {len(product_history)} days with same value {product_history['daily_quantity'].iloc[0]}. Using category median.")
                 cat_median = category_stats_dict.get(cat1, 10)  # Default 10 nếu không tìm thấy category
                 cold_start_products.append({
                     'branch': branch,
