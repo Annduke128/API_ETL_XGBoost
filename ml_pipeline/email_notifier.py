@@ -674,37 +674,32 @@ class EmailNotifier:
                     trend_class = 'trend-stable'
                     trend_text = 'Ổn định'
                 
-                # Tồn kho tối ưu (recommended_safety_stock từ inventory_recs)
+                # Tồn kho tối ưu (chỉ dùng cho hiển thị, không dùng cho tính suggested_order)
                 optimal_stock = 0
-                suggested_order = 0
-                
                 if inventory_recs:
                     for rec in inventory_recs:
                         if rec.get('product_code') == product_code:
-                            # Sửa: dùng đúng key 'recommended_safety_stock'
                             optimal_stock = rec.get('recommended_safety_stock', 0)
-                            suggested_order = rec.get('suggested_order_quantity', 0)
                             break
                 
-                # Nếu không có trong inventory_recs, tính từ forecast - Method 2
-                if optimal_stock == 0 and forecast_next_week > 0:
-                    # Method 2: Standard Safety Stock formula
-                    # avg_daily = forecast_next_week / 7
-                    # max_daily = avg_daily * 2 (giả định biến động 2x)
-                    avg_daily = forecast_next_week / 7
-                    max_daily = avg_daily * 2
-                    lead_time_max = 14  # days
-                    lead_time_avg = 10  # days
-                    
-                    # Formula: (Max Demand × Max Lead Time) - (Avg Demand × Avg Lead Time)
-                    optimal_stock = (max_daily * lead_time_max) - (avg_daily * lead_time_avg)
-                    optimal_stock = max(0, round(optimal_stock))
-                    
+                # Luôn tính suggested_order từ forecast để đồng bộ với CSV
+                # Unified formula: forecast_14_days * 1.5 - last_week_sales - ton_kho
+                suggested_order = 0
+                if forecast_next_week > 0:
                     # Cap optimal_stock để tránh giá trị quá cao do outliers
-                    optimal_stock = min(optimal_stock, 5000)
+                    if optimal_stock > 0:
+                        optimal_stock = min(optimal_stock, 5000)
+                    else:
+                        # Tính optimal_stock nếu không có từ inventory_recs
+                        avg_daily = forecast_next_week / 7
+                        max_daily = avg_daily * 2
+                        lead_time_max = 14
+                        lead_time_avg = 10
+                        optimal_stock = (max_daily * lead_time_max) - (avg_daily * lead_time_avg)
+                        optimal_stock = max(0, round(optimal_stock))
+                        optimal_stock = min(optimal_stock, 5000)
                     
-                    # Suggested order = dự báo 14 ngày * 1.5 - bán tuần trước - tồn kho
-                    # Unified formula: forecast * 1.5 - last_week - ton_kho
+                    # Unified formula: forecast * 1.5 - last_week - ton_kho (đồng bộ với CSV)
                     suggested_order = max(0, round(forecast_next_week * 1.5 - last_week_sales - ton_kho))
                 
                 product_data.append({
