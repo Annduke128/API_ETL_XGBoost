@@ -948,8 +948,8 @@ class EmailNotifier:
                         <ul style="margin: 0; padding-left: 20px; font-size: 12px; color: #555;">
                             <li><strong>Bán tuần qua:</strong> Số lượng bán thực tế 7 ngày gần nhất</li>
                             <li><strong>Xu hướng:</strong> % thay đổi so với tuần trước (📈 tăng, 📉 giảm, ➡️ ổn định)</li>
-                            <li><strong>Tồn kho tối ưu:</strong> Mức tồn kho an toàn để tránh hết hàng (1.5x dự báo)</li>
-                            <li><strong>Đề xuất đặt tuần tới:</strong> Số lượng nên đặt thêm để đảm bảo đủ hàng</li>
+                            <li><strong>Tồn kho tối ưu:</strong> Mức tồn kho an toàn để tránh hết hàng (1.5x dự báo 2 tuần)</li>
+                            <li><strong>Đề xuất đặt 2 tuần tới:</strong> Số lượng nên đặt thêm để đảm bảo đủ hàng</li>
                         </ul>
                     </div>
                     

@@ -1488,7 +1488,7 @@ class SalesForecaster:
                 logger.info(f"   - Loại {cls}: {count} sản phẩm")
         return df
     
-    def predict_next_week(self, use_abc_filter: bool = True, abc_top_n: int = 50) -> pd.DataFrame:
+    def predict_next_week(self, use_abc_filter: bool = True, abc_top_n: int = 50, forecast_days: int = 14) -> pd.DataFrame:
         """
         Dự báo cho tuần tới với batch query và ABC-based product selection.
         Sử dụng Model 1 (product_quantity).
@@ -1496,10 +1496,11 @@ class SalesForecaster:
         Args:
             use_abc_filter: Nếu True, chỉ dự báo cho Top N sản phẩm cần nhập (mặc định: 50)
             abc_top_n: Số sản phẩm cần nhập để dự báo (mặc định: 50)
+            forecast_days: Số ngày dự báo (mặc định: 14 ngày = 2 tuần)
         
         Returns:
-            DataFrame với dự báo cho 7 ngày tới
-        """
+            DataFrame với dự báo cho forecast_days ngày tới
+        ""'
         # Load models nếu chưa có
         if not self.models:
             for name in ['product_quantity', 'category_trend']:
@@ -1511,10 +1512,10 @@ class SalesForecaster:
         if 'product_quantity' not in self.models:
             raise ValueError("Model 'product_quantity' chưa được train hoặc load!")
         
-        # Tạo future dates (7 ngày tới)
+        # Tạo future dates (14 ngày tới = 2 tuần)
         future_dates = pd.date_range(
             start=datetime.now().date() + timedelta(days=1),
-            periods=7,
+            periods=forecast_days,
             freq='D'
         )
         
@@ -1556,7 +1557,7 @@ class SalesForecaster:
                 product_list = all_products['ma_hang'].tolist()
             product_abc_map = {}
         
-        logger.info(f"🔮 Dự báo cho {len(product_list)} sản phẩm x {len(future_dates)} ngày = {len(product_list) * len(future_dates)} dự báo")
+        logger.info(f"🔮 Dự báo cho {len(product_list)} sản phẩm x {len(future_dates)} ngày ({forecast_days} ngày = {forecast_days/7:.0f} tuần) = {len(product_list) * len(future_dates)} dự báo")
         
         # BƯỚC 2a: Lấy DYNAMIC SEASONAL FACTORS cho ngày tương lai
         logger.info("📥 Đang tải dynamic seasonal factors cho ngày tương lai...")
@@ -2520,7 +2521,7 @@ class SalesForecaster:
         # Tổng hợp theo category
         if not result_df.empty:
             summary = result_df.groupby('nhom_hang_cap_1')['predicted_quantity'].sum().sort_values(ascending=False)
-            logger.info("\n📊 Category Forecast Summary (7 days total):")
+            logger.info(f"\n📊 Category Forecast Summary ({forecast_days} days total):")
             for cat, qty in summary.head(10).items():
                 logger.info(f"   {cat}: {qty:,.0f} units")
         
@@ -2561,7 +2562,7 @@ class SalesForecaster:
         total_model1 = model1_by_category['predicted_quantity'].sum()
         total_model2 = model2_by_category.sum()
         
-        logger.info(f"\n📈 TỔNG DỰ BÁO (7 ngày):")
+        logger.info(f"\n📈 TỔNG DỰ BÁO (14 ngày/2 tuần):")
         logger.info(f"   Model 1 (Product-level):  {total_model1:,.0f} units")
         logger.info(f"   Model 2 (Category-level): {total_model2:,.0f} units")
         
@@ -2800,7 +2801,7 @@ class SalesForecaster:
         FROM ml_forecasts
         WHERE ma_hang = '{product_code}'
         AND forecast_date >= CURRENT_DATE
-        AND forecast_date <= CURRENT_DATE + INTERVAL '7 days'
+        AND forecast_date <= CURRENT_DATE + INTERVAL '14 days'
         """
         
         forecast = self.pg.execute_query(forecast_query)
@@ -2818,9 +2819,9 @@ class SalesForecaster:
         # Khuyến nghị
         return {
             'product_code': product_code,
-            'predicted_next_7_days': total_predicted,
+            'predicted_next_14_days': total_predicted,
             'avg_daily_demand': avg_daily,
-            'recommended_safety_stock': round(avg_daily * 7 * 1.5),  # 7 days * safety factor
+            'recommended_safety_stock': round(avg_daily * 14 * 1.5),  # 14 days * safety factor
             'reorder_point': round(avg_daily * 14),  # 2 weeks
             'suggested_order_quantity': round(avg_daily * 30),  # 1 month
             'reorder_urgency': 'High' if total_predicted > avg_daily * 14 else 'Normal'
@@ -2829,10 +2830,11 @@ class SalesForecaster:
     def generate_purchase_order_csv(self, forecasts: pd.DataFrame = None, 
                                      top_n: int = 50,
                                      output_path: str = None,
-                                     lead_time_max: int = 7,
-                                     lead_time_avg: int = 5) -> str:
+                                     lead_time_max: int = 14,
+                                     lead_time_avg: int = 10,
+                                     forecast_days: int = 14) -> str:
         """
-        Tạo file CSV đơn hàng cần đặt cho tuần tới
+        Tạo file CSV đơn hàng cần đặt cho 2 tuần tới
         
         Logic ưu tiên:
         1. Đảm bảo đủ lượng tồn kho tối thiểu (Tồn nhỏ nhất)
@@ -2843,10 +2845,11 @@ class SalesForecaster:
             forecasts: DataFrame dự báo (nếu None sẽ chạy predict)
             top_n: Số sản phẩm cần đặt
             output_path: Đường dẫn file output
-            lead_time_max: Lead time tối đa (ngày) - mặc định 7
-            lead_time_avg: Lead time trung bình (ngày) - mặc định 5
+            lead_time_max: Lead time tối đa (ngày) - mặc định 14 (2 tuần)
+            lead_time_avg: Lead time trung bình (ngày) - mặc định 10 (2 tuần)
+            forecast_days: Số ngày dự báo (mặc định 14 ngày = 2 tuần)
         
-        Công thức: Lượng cần nhập = MAX(Dự báo 7 ngày, Tồn nhỏ nhất) - Tồn kho hiện tại
+        Công thức: Lượng cần nhập = MAX(Dự báo 14 ngày, Tồn nhỏ nhất) - Tồn kho hiện tại
         
         Args:
             forecasts: DataFrame từ predict_next_week(). Nếu None sẽ chạy dự báo mới.
@@ -2862,8 +2865,8 @@ class SalesForecaster:
         
         # Nếu không có forecasts thì chạy dự báo mới
         if forecasts is None or forecasts.empty:
-            logger.info("Chưa có dữ liệu dự báo, đang chạy predict_next_week...")
-            forecasts = self.predict_next_week(use_abc_filter=True, abc_top_n=50)
+            logger.info("Chưa có dữ liệu dự báo, đang chạy predict_next_week (2 tuần)...")
+            forecasts = self.predict_next_week(use_abc_filter=True, abc_top_n=50, forecast_days=forecast_days)
         
         if forecasts.empty:
             logger.error("❌ Không có dữ liệu dự báo để tạo đơn hàng")
@@ -3040,11 +3043,12 @@ class SalesForecaster:
             logger.warning(f"⚠️ Không thể tính Safety Stock: {e}")
             safety_stock_map = {}
         
-        # 4. Tổng hợp dự báo theo sản phẩm (7 ngày)
+        # 4. Tổng hợp dự báo theo sản phẩm (14 ngày = 2 tuần)
         product_summary = forecasts.groupby(['ma_hang', 'ten_san_pham']).agg({
             'predicted_quantity': 'sum'
         }).reset_index()
-        product_summary.columns = ['ma_hang', 'ten_san_pham', 'forecast_7d']
+        product_summary.columns = ['ma_hang', 'ten_san_pham', f'forecast_{forecast_days}d']
+        forecast_col = f'forecast_{forecast_days}d'
         
         # 5. Thêm các thông tin bổ sung
         product_summary['ma_vach'] = product_summary['ma_hang'].map(
@@ -3067,7 +3071,7 @@ class SalesForecaster:
             lambda x: product_info.get(x, {}).get('margin', 0))
         
         # 6. Tính LƯỢNG CẦN NHẬP
-        # Công thức mới: MAX(Dự báo 7 ngày, Tồn kho tối ưu + Tồn kho an toàn) - Tồn kho hiện tại
+        # Công thức mới: MAX(Dự báo 14 ngày, Tồn kho tối ưu + Tồn kho an toàn) - Tồn kho hiện tại
         # Trong đó: 
         # - Tồn kho tối ưu = median(lượng bán tuần + tồn kho nhỏ nhất × 0.75) qua 4 tuần
         # - Tồn kho an toàn = (Nhu cầu max × Lead time max) - (Nhu cầu TB × Lead time TB)
@@ -3075,7 +3079,7 @@ class SalesForecaster:
             product_summary['ton_kho_toi_uu'] + product_summary['ton_an_toan']
         )
         product_summary['luong_can_nhap'] = (
-            product_summary[['forecast_7d', 'tong_ton_kho_muc_tieu']].max(axis=1) 
+            product_summary[[forecast_col, 'tong_ton_kho_muc_tieu']].max(axis=1) 
             - product_summary['ton_hien_tai']
         ).clip(lower=0)  # Không nhập số âm
         
@@ -3172,7 +3176,8 @@ class SalesForecaster:
     
     def generate_purchase_order_excel(self, forecasts: pd.DataFrame = None, 
                                        top_n: int = 50,
-                                       output_path: str = None) -> str:
+                                       output_path: str = None,
+                                       forecast_days: int = 14) -> str:
         """
         Tạo file Excel (.xlsx) đơn hàng cần đặt - Đơn giản hóa cho ngưởi dùng
         Chỉ gồm 3 cột: Tên sản phẩm, Mã vạch, Số lượng cần nhập
@@ -3181,6 +3186,7 @@ class SalesForecaster:
             forecasts: DataFrame dự báo (nếu None sẽ chạy predict)
             top_n: Số sản phẩm cần đặt
             output_path: Đường dẫn file output
+            forecast_days: Số ngày dự báo (mặc định 14 ngày = 2 tuần)
             
         Returns:
             Đường dẫn file Excel đã tạo
@@ -3191,8 +3197,8 @@ class SalesForecaster:
         
         # Nếu không có forecasts thì chạy dự báo mới
         if forecasts is None or forecasts.empty:
-            logger.info("Chưa có dữ liệu dự báo, đang chạy predict_next_week...")
-            forecasts = self.predict_next_week(use_abc_filter=True, abc_top_n=top_n)
+            logger.info("Chưa có dữ liệu dự báo, đang chạy predict_next_week (2 tuần)...")
+            forecasts = self.predict_next_week(use_abc_filter=True, abc_top_n=top_n, forecast_days=forecast_days)
         
         if forecasts.empty:
             logger.error("❌ Không có dữ liệu dự báo để tạo đơn hàng")
@@ -3339,7 +3345,7 @@ class SalesForecaster:
         
         try:
             # Dự báo cho Top 50 sản phẩm cần nhập
-            forecasts = self.predict_next_week(use_abc_filter=True, abc_top_n=50)
+            forecasts = self.predict_next_week(use_abc_filter=True, abc_top_n=50, forecast_days=14)
             
             if len(forecasts) > 0:
                 # Tính tổng theo sản phẩm (dùng predicted_quantity)
@@ -3357,10 +3363,10 @@ class SalesForecaster:
                 
                 logger.info(f"\n📊 TỔNG QUAN DỰ BÁO:")
                 logger.info(f"   • Tổng số sản phẩm: {forecasts['ma_hang'].nunique()}")
-                logger.info(f"   • Tổng số ngày dự báo: 7 ngày")
+                logger.info(f"   • Tổng số ngày dự báo: 14 ngày (2 tuần)")
                 logger.info(f"   • Tổng số lượng dự báo: {int(forecasts['predicted_quantity'].sum())} units")
                 
-                logger.info("\n🔥 Top 15 Sản phẩm dự báo bán chạy nhất (7 ngày tới):")
+                logger.info("\n🔥 Top 15 Sản phẩm dự báo bán chạy nhất (14 ngày/2 tuần tới):")
                 for idx, (product, row) in enumerate(top_quantity.iterrows(), 1):
                     qty = row['predicted_quantity']
                     cat = row['nhom_hang_cap_1']
@@ -3662,7 +3668,7 @@ if __name__ == '__main__':
     if args.mode in ['predict', 'all']:
         logger.info("🔮 Mode: PREDICTION")
         # Dự báo Top 50 sản phẩm cần nhập (theo doanh thu lịch sử)
-        forecasts = forecaster.predict_next_week(use_abc_filter=True, abc_top_n=50)
+        forecasts = forecaster.predict_next_week(use_abc_filter=True, abc_top_n=50, forecast_days=14)
         if len(forecasts) > 0:
             forecaster.save_forecasts(forecasts, send_email=True)
             logger.info(f"✅ Generated and saved {len(forecasts)} forecasts")
