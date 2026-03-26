@@ -2831,8 +2831,29 @@ class SalesForecaster:
             logger.warning(f"⚠️ Không thể lấy tồn kho tối thiểu: {e}")
             min_stock = 0
         
-        # Tính Safety Stock
-        safety_stock = round(avg_daily * 14 * 1.5)  # 14 days * safety factor
+        # Tính Safety Stock - Method 2: Standard formula
+        # Cần lấy max_daily_demand từ dữ liệu lịch sử
+        try:
+            max_daily_query = f"""
+            SELECT MAX(daily_sold) as max_daily
+            FROM (
+                SELECT SUM(quantity_sold) as daily_sold
+                FROM retail_dw.fct_regular_sales
+                WHERE product_code = '{product_code}'
+                  AND transaction_date >= today() - 28
+                GROUP BY transaction_date
+            )
+            """
+            max_daily_df = self.ch.query(max_daily_query)
+            max_daily = max_daily_df['max_daily'].iloc[0] if not max_daily_df.empty else avg_daily * 2
+        except:
+            max_daily = avg_daily * 2  # Fallback: 2x average
+        
+        # Standard Safety Stock formula: (Max Demand × Max Lead Time) - (Avg Demand × Avg Lead Time)
+        lead_time_max = 14  # days
+        lead_time_avg = 10  # days
+        safety_stock = (max_daily * lead_time_max) - (avg_daily * lead_time_avg)
+        safety_stock = max(0, round(safety_stock))
         
         # Logic: So sánh Safety Stock với Min Stock
         if safety_stock < min_stock:
@@ -3534,9 +3555,18 @@ class SalesForecaster:
                         cat = row['nhom_hang_cap_1']
                         name = row.get('ten_san_pham', 'N/A')[:30]  # Giới hạn 30 ký tự
                         
-                        # Tính toán khuyến nghị đơn giản
+                        # Tính toán khuyến nghị - Method 2: Standard Safety Stock formula
                         avg_daily = qty / 7
-                        safety_stock = round(avg_daily * 7 * 1.5)  # 1.5x weekly demand
+                        
+                        # Giả định max_daily = 2x avg_daily nếu không có dữ liệu chi tiết
+                        max_daily = avg_daily * 2
+                        lead_time_max = 14  # days
+                        lead_time_avg = 10  # days
+                        
+                        # Standard formula: (Max Demand × Max Lead Time) - (Avg Demand × Avg Lead Time)
+                        safety_stock = (max_daily * lead_time_max) - (avg_daily * lead_time_avg)
+                        safety_stock = max(0, round(safety_stock))
+                        
                         reorder_point = round(avg_daily * 14)  # 2 weeks
                         suggested_order = round(avg_daily * 30)  # 1 month
                         urgency = 'HIGH' if qty > avg_daily * 14 else 'NORMAL'

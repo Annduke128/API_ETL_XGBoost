@@ -683,10 +683,20 @@ class EmailNotifier:
                             suggested_order = rec.get('suggested_order_quantity', 0)
                             break
                 
-                # Nếu không có trong inventory_recs, tính từ forecast
+                # Nếu không có trong inventory_recs, tính từ forecast - Method 2
                 if optimal_stock == 0 and forecast_next_week > 0:
-                    # Safety stock = 1.5 tuần dự báo (7 ngày * 1.5)
-                    optimal_stock = round(forecast_next_week * 1.5)
+                    # Method 2: Standard Safety Stock formula
+                    # avg_daily = forecast_next_week / 7
+                    # max_daily = avg_daily * 2 (giả định biến động 2x)
+                    avg_daily = forecast_next_week / 7
+                    max_daily = avg_daily * 2
+                    lead_time_max = 14  # days
+                    lead_time_avg = 10  # days
+                    
+                    # Formula: (Max Demand × Max Lead Time) - (Avg Demand × Avg Lead Time)
+                    optimal_stock = (max_daily * lead_time_max) - (avg_daily * lead_time_avg)
+                    optimal_stock = max(0, round(optimal_stock))
+                    
                     # Suggested order = dự báo 30 ngày - tồn hiện tại (ước tính từ last_week)
                     estimated_current_stock = last_week_sales  # Ước tính tồn hiện tại = bán tuần trước
                     suggested_order = max(0, round(forecast_next_week * 4.3) - estimated_current_stock)
