@@ -2197,25 +2197,48 @@ class SalesForecaster:
                     # 4. Đảm bảo numeric type trước khi sắp xếp
                     forecasts['last_week_sales'] = pd.to_numeric(forecasts['last_week_sales'], errors='coerce').fillna(0)
                     forecasts['ton_kho_nho_nhat'] = pd.to_numeric(forecasts['ton_kho_nho_nhat'], errors='coerce').fillna(0)
+                    forecasts['predicted_quantity'] = pd.to_numeric(forecasts['predicted_quantity'], errors='coerce').fillna(0)
                     
-                    # 5. Sắp xếp: last_week_sales DESC, rồi ton_kho_nho_nhat ASC
+                    # 5. Tính suggested_order cho mỗi sản phẩm
+                    # Suggested order = dự báo 14 ngày (2 tuần) - tồn hiện tại (ước tính = bán tuần trước)
+                    product_summary = forecasts.groupby('ma_hang').agg({
+                        'predicted_quantity': 'sum',  # Tổng 14 ngày
+                        'last_week_sales': 'first',
+                        'ton_kho_nho_nhat': 'first',
+                        'ten_san_pham': 'first',
+                        'abc_class': 'first'
+                    }).reset_index()
+                    product_summary['suggested_order'] = (
+                        product_summary['predicted_quantity'] * 2 - product_summary['last_week_sales']
+                    ).clip(lower=0).round()
+                    
+                    # Merge suggested_order vào forecasts
+                    forecasts = forecasts.merge(
+                        product_summary[['ma_hang', 'suggested_order']], 
+                        on='ma_hang', 
+                        how='left'
+                    )
+                    forecasts['suggested_order'] = forecasts['suggested_order'].fillna(0)
+                    
+                    # 6. Sắp xếp: suggested_order DESC (số lượng cần nhập nhiều nhất lên đầu)
                     forecasts = forecasts.sort_values(
-                        by=['last_week_sales', 'ton_kho_nho_nhat'], 
-                        ascending=[False, True]
+                        by=['suggested_order', 'last_week_sales'], 
+                        ascending=[False, False]
                     ).reset_index(drop=True)
                     
-                    logger.info(f"   ✅ Đã sắp xếp: 1) Bán tuần trước (cao→thấp) 2) Tồn kho nhỏ nhất (thấp→cao)")
+                    logger.info(f"   ✅ Đã sắp xếp: 1) Số lượng cần nhập (cao→thấp) 2) Bán tuần trước (cao→thấp)")
                     
-                    # Log top 10 unique products sau khi sắp xếp (forecasts có nhiều dòng cho cùng 1 product)
+                    # Log top 10 unique products sau khi sắp xếp
                     unique_products = forecasts.drop_duplicates(subset=['ma_hang']).head(10)
                     logger.info(f"   📋 Top 10 sản phẩm sau sắp xếp:")
                     for idx, row in unique_products.iterrows():
-                        logger.info(f"      {row['ma_hang']} | {row['ten_san_pham'][:25]:<25} | Bán T-{row['last_week_sales']:>4.0f} | Tồn {row['ton_kho_nho_nhat']:>4.0f} | {row['abc_class']}")
+                        logger.info(f"      {row['ma_hang']} | {row['ten_san_pham'][:25]:<25} | Cần nhập {row['suggested_order']:>4.0f} | Bán T-{row['last_week_sales']:>4.0f} | Tồn {row['ton_kho_nho_nhat']:>4.0f}")
                     
-                    # Thống kê số sản phẩm có last_week_sales > 0
-                    n_with_sales = (forecasts.drop_duplicates(subset=['ma_hang'])['last_week_sales'] > 0).sum()
+                    # Thống kê
+                    n_with_order = (forecasts.drop_duplicates(subset=['ma_hang'])['suggested_order'] > 0).sum()
                     n_total = forecasts['ma_hang'].nunique()
-                    logger.info(f"   📊 Thống kê: {n_with_sales}/{n_total} sản phẩm có bán tuần trước > 0")
+                    total_order = forecasts.drop_duplicates(subset=['ma_hang'])['suggested_order'].sum()
+                    logger.info(f"   📊 Thống kê: {n_with_order}/{n_total} sản phẩm cần nhập hàng, tổng cần nhập: {total_order:,.0f}")
                     
                 except Exception as e:
                     logger.warning(f"⚠️ Lỗi khi áp dụng logic lọc/sắp xếp: {e}")

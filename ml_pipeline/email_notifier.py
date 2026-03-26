@@ -836,7 +836,7 @@ class EmailNotifier:
         if 'forecast_date' in forecasts.columns:
             min_date = pd.to_datetime(forecasts['forecast_date']).min().strftime('%d/%m/%Y')
             max_date = pd.to_datetime(forecasts['forecast_date']).max().strftime('%d/%m/%Y')
-            date_range = f"{min_date} - {max_date}"
+            date_range = f"{min_date} - {max_date} (2 tuần, bắt đầu từ tuần kế tiếp)"
         else:
             date_range = "N/A"
         
@@ -896,7 +896,7 @@ class EmailNotifier:
                 <div class="header">
                     {logo_html}
                     <h1>BẢN DỰ BÁO DOANH SỐ HASU</h1>
-                    <div class="subtitle">Kì dự đoán: {date_range}</div>
+                    <div class="subtitle">Kỳ dự đoán: {date_range}</div>
                 </div>
                 
                 <div class="content">
@@ -941,7 +941,7 @@ class EmailNotifier:
                                 <th style="width: 12%; text-align: right;">Bán tuần qua</th>
                                 <th style="width: 12%; text-align: center;">Xu hướng</th>
                                 <th style="width: 12%; text-align: right;">Tồn kho tối ưu</th>
-                                <th style="width: 12%; text-align: right;">Đề xuất đặt tuần tới</th>
+                                <th style="width: 12%; text-align: right;">Đề xuất đặt 2 tuần tới</th>
                             </tr>
                         </thead>
                         <tbody>
