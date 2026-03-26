@@ -2862,8 +2862,8 @@ class SalesForecaster:
             order_logic = f"SS ({safety_stock}) < Min ({min_stock}): Đặt = Min - SS"
         else:
             # Nếu SS >= Min Stock → Đặt bình thường
-            suggested_order = round(avg_daily * 30)  # 1 month
-            order_logic = f"SS ({safety_stock}) >= Min ({min_stock}): Đặt = 30 ngày dự báo"
+            suggested_order = round(avg_daily * 14)  # 14 days = 2 weeks
+            order_logic = f"SS ({safety_stock}) >= Min ({min_stock}): Đặt = 14 ngày dự báo"
         
         # Khuyến nghị
         return {
@@ -3568,7 +3568,7 @@ class SalesForecaster:
                         safety_stock = max(0, round(safety_stock))
                         
                         reorder_point = round(avg_daily * 14)  # 2 weeks
-                        suggested_order = round(avg_daily * 30)  # 1 month
+                        suggested_order = round(avg_daily * 14)  # 14 days = 2 weeks
                         urgency = 'HIGH' if qty > avg_daily * 14 else 'NORMAL'
                         
                         rec = {

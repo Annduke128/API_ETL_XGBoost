@@ -697,9 +697,9 @@ class EmailNotifier:
                     optimal_stock = (max_daily * lead_time_max) - (avg_daily * lead_time_avg)
                     optimal_stock = max(0, round(optimal_stock))
                     
-                    # Suggested order = dự báo 30 ngày - tồn hiện tại (ước tính từ last_week)
+                    # Suggested order = dự báo 14 ngày (2 tuần) - tồn hiện tại (ước tính từ last_week)
                     estimated_current_stock = last_week_sales  # Ước tính tồn hiện tại = bán tuần trước
-                    suggested_order = max(0, round(forecast_next_week * 4.3) - estimated_current_stock)
+                    suggested_order = max(0, round(forecast_next_week * 2) - estimated_current_stock)  # 2 weeks = 14 days
                 
                 product_data.append({
                     'code': product_code,
