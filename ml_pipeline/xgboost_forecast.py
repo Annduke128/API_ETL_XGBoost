@@ -1774,8 +1774,11 @@ class SalesForecaster:
             is_uniform_outlier = (len(product_history) < 7 and product_history['daily_quantity'].nunique() == 1)
             if len(product_history) < 2 or is_uniform_outlier:
                 if is_uniform_outlier:
-                    logger.warning(f"   ⚠️ Uniform outlier detected: {product} has {len(product_history)} days with same value {product_history['daily_quantity'].iloc[0]}. Using category median.")
-                cat_median = category_stats_dict.get(cat1, 10)  # Default 10 nếu không tìm thấy category
+                    logger.warning(f"   ⚠️ Uniform outlier detected: {product} has {len(product_history)} days with same value {product_history['daily_quantity'].iloc[0]}. Using capped category median.")
+                    # Cap category median cho uniform outliers để tránh giá trị quá cao
+                    cat_median = min(category_stats_dict.get(cat1, 10), 50)  # Max 50 cho uniform outliers
+                else:
+                    cat_median = category_stats_dict.get(cat1, 10)  # Default 10 nếu không tìm thấy category
                 cold_start_products.append({
                     'branch': branch,
                     'product': product,
