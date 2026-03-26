@@ -949,6 +949,8 @@ class EmailNotifier:
                             <li><strong>Bán tuần qua:</strong> Số lượng bán thực tế 7 ngày gần nhất</li>
                             <li><strong>Xu hướng:</strong> % thay đổi so với tuần trước (📈 tăng, 📉 giảm, ➡️ ổn định)</li>
                             <li><strong>Tồn kho tối ưu:</strong> Mức tồn kho an toàn để tránh hết hàng (1.5x dự báo 2 tuần)</li>
+                            <li><strong>Logic đặt hàng:</strong> Nếu Safety Stock < Tồn tối thiểu → Đặt = Min - SS<br>
+                                &nbsp;&nbsp;&nbsp;&nbsp;Nếu Safety Stock ≥ Tồn tối thiểu → Đặt = MAX(Dự báo, Target) - Tồn hiện tại</li>
                             <li><strong>Đề xuất đặt 2 tuần tới:</strong> Số lượng nên đặt thêm để đảm bảo đủ hàng</li>
                         </ul>
                     </div>

@@ -2792,7 +2792,7 @@ class SalesForecaster:
             return {'error': str(e)}
     
     def get_inventory_recommendations(self, product_code: str) -> Dict:
-        """Đưa ra khuyến nghị tồn kho"""
+        """Đưa ra khuyến nghị tồn kho với logic Safety Stock so sánh Min Stock"""
         # Lấy dự báo cho sản phẩm
         forecast_query = f"""
         SELECT 
@@ -2816,14 +2816,44 @@ class SalesForecaster:
         if pd.isna(total_predicted) or pd.isna(avg_daily):
             return {'error': 'Invalid forecast data'}
         
+        # Lấy tồn kho tối thiểu từ PostgreSQL
+        try:
+            from sqlalchemy import text
+            with self.pg.get_connection() as conn:
+                min_stock_query = f"""
+                SELECT COALESCE(ton_nho_nhat, 0) as ton_nho_nhat
+                FROM products
+                WHERE ma_hang = '{product_code}'
+                """
+                min_stock_df = pd.read_sql(text(min_stock_query), conn)
+                min_stock = min_stock_df['ton_nho_nhat'].iloc[0] if not min_stock_df.empty else 0
+        except Exception as e:
+            logger.warning(f"⚠️ Không thể lấy tồn kho tối thiểu: {e}")
+            min_stock = 0
+        
+        # Tính Safety Stock
+        safety_stock = round(avg_daily * 14 * 1.5)  # 14 days * safety factor
+        
+        # Logic: So sánh Safety Stock với Min Stock
+        if safety_stock < min_stock:
+            # Nếu SS < Min Stock → Đặt = Min Stock - SS
+            suggested_order = max(0, min_stock - safety_stock)
+            order_logic = f"SS ({safety_stock}) < Min ({min_stock}): Đặt = Min - SS"
+        else:
+            # Nếu SS >= Min Stock → Đặt bình thường
+            suggested_order = round(avg_daily * 30)  # 1 month
+            order_logic = f"SS ({safety_stock}) >= Min ({min_stock}): Đặt = 30 ngày dự báo"
+        
         # Khuyến nghị
         return {
             'product_code': product_code,
             'predicted_next_14_days': total_predicted,
             'avg_daily_demand': avg_daily,
-            'recommended_safety_stock': round(avg_daily * 14 * 1.5),  # 14 days * safety factor
+            'min_stock': min_stock,
+            'recommended_safety_stock': safety_stock,
             'reorder_point': round(avg_daily * 14),  # 2 weeks
-            'suggested_order_quantity': round(avg_daily * 30),  # 1 month
+            'suggested_order_quantity': suggested_order,
+            'order_logic': order_logic,
             'reorder_urgency': 'High' if total_predicted > avg_daily * 14 else 'Normal'
         }
     
@@ -3071,17 +3101,29 @@ class SalesForecaster:
             lambda x: product_info.get(x, {}).get('margin', 0))
         
         # 6. Tính LƯỢNG CẦN NHẬP
-        # Công thức mới: MAX(Dự báo 14 ngày, Tồn kho tối ưu + Tồn kho an toàn) - Tồn kho hiện tại
-        # Trong đó: 
-        # - Tồn kho tối ưu = median(lượng bán tuần + tồn kho nhỏ nhất × 0.75) qua 4 tuần
-        # - Tồn kho an toàn = (Nhu cầu max × Lead time max) - (Nhu cầu TB × Lead time TB)
+        # Logic mới: So sánh Safety Stock với Tồn kho tối thiểu
+        # - Nếu ton_an_toan < ton_nho_nhat: lượng cần nhập = ton_nho_nhat - ton_an_toan
+        # - Nếu ton_an_toan >= ton_nho_nhat: MAX(Dự báo 14 ngày, Tồn kho tối ưu + Tồn kho an toàn) - Tồn kho hiện tại
         product_summary['tong_ton_kho_muc_tieu'] = (
             product_summary['ton_kho_toi_uu'] + product_summary['ton_an_toan']
         )
-        product_summary['luong_can_nhap'] = (
-            product_summary[[forecast_col, 'tong_ton_kho_muc_tieu']].max(axis=1) 
-            - product_summary['ton_hien_tai']
-        ).clip(lower=0)  # Không nhập số âm
+        
+        # So sánh Safety Stock với Tồn kho tối thiểu
+        def calculate_order_quantity(row):
+            ss = row['ton_an_toan']  # Safety Stock
+            min_stock = row['ton_nho_nhat']  # Tồn kho tối thiểu
+            forecast = row[forecast_col]
+            target = row['tong_ton_kho_muc_tieu']
+            current = row['ton_hien_tai']
+            
+            # Nếu Safety Stock < Tồn kho tối thiểu
+            if ss < min_stock:
+                return max(0, min_stock - ss)
+            else:
+                # Công thức bình thường: MAX(Dự báo, Target) - Tồn kho hiện tại
+                return max(0, max(forecast, target) - current)
+        
+        product_summary['luong_can_nhap'] = product_summary.apply(calculate_order_quantity, axis=1)
         
         # 7. SẮP XẾP ƯU TIÊN
         # Primary: Lượng cần nhập (nhiều nhất = cần gấp nhất)
@@ -3099,12 +3141,18 @@ class SalesForecaster:
         top_products['is_high_margin'] = top_products['margin_pct'] > 20
         top_products['is_high_value'] = top_products['doanh_thu_4tuan'] >= top_products['doanh_thu_4tuan'].quantile(0.8)
         
+        # Thống kê sản phẩm có Safety Stock < Tồn kho tối thiểu
+        ss_below_min = top_products[top_products['ton_an_toan'] < top_products['ton_nho_nhat']]
+        
         logger.info(f"\n📊 Danh sách {len(top_products)} sản phẩm cần đặt hàng:")
         logger.info(f"   - Tổng lượng cần nhập: {top_products['luong_can_nhap'].sum():,.0f} units")
         logger.info(f"   - Tồn kho tối ưu TB: {top_products['ton_kho_toi_uu'].mean():,.0f} units")
         logger.info(f"   - Tồn kho an toàn TB: {top_products['ton_an_toan'].mean():,.0f} units")
+        logger.info(f"   - Tồn kho tối thiểu TB: {top_products['ton_nho_nhat'].mean():,.0f} units")
         logger.info(f"   - Tổng mục tiêu TB: {top_products['tong_ton_kho_muc_tieu'].mean():,.0f} units")
+        logger.info(f"   - Sản phẩm có SS < Min Stock: {len(ss_below_min)} (đặt = Min - SS)")
         logger.info(f"   - Công thức Safety Stock: (Nhu cầu max × {lead_time_max}d) - (Nhu cầu TB × {lead_time_avg}d)")
+        logger.info(f"   - Logic đặt hàng: Nếu SS < Min Stock → Đặt = Min - SS, ngược lại MAX(Forecast, Target) - Current")
         logger.info(f"   - Sản phẩm HIGH MARGIN (>20%): {top_products['is_high_margin'].sum()}")
         logger.info(f"   - Sản phẩm HIGH VALUE (top 20%): {top_products['is_high_value'].sum()}")
         
