@@ -1500,7 +1500,7 @@ class SalesForecaster:
         
         Returns:
             DataFrame với dự báo cho forecast_days ngày tới
-        ""'
+        """
         # Load models nếu chưa có
         if not self.models:
             for name in ['product_quantity', 'category_trend']:

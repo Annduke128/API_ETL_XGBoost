@@ -9,7 +9,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: ml
-        image: annduke/hasu-ml-pipeline:gpu-stable-v9
+        image: annduke/hasu-ml-pipeline:gpu-stable-v10
         imagePullPolicy: Always
         command: 
         - python
