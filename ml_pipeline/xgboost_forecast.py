@@ -3303,10 +3303,11 @@ class SalesForecaster:
             return None
         
         # Lấy danh sách sản phẩm và tổng số lượng cần nhập
+        # Sử dụng suggested_order đã tính thay vì predicted_quantity thô
         product_list = forecasts.groupby('ma_hang').agg({
-            'predicted_quantity': 'sum',
+            'suggested_order': 'sum',
             'ten_san_pham': 'first'
-        }).sort_values('predicted_quantity', ascending=False).head(top_n)
+        }).sort_values('suggested_order', ascending=False).head(top_n)
         
         # Lấy mã vạch từ PostgreSQL
         try:
@@ -3342,7 +3343,7 @@ class SalesForecaster:
             simple_orders.append({
                 'Tên sản phẩm': ten_sp,
                 'Mã vạch': ma_vach,
-                'Số lượng cần nhập': int(row['predicted_quantity'])
+                'Số lượng cần nhập': int(row['suggested_order'])
             })
         
         po_df = pd.DataFrame(simple_orders)
