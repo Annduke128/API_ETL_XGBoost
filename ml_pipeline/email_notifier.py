@@ -700,9 +700,9 @@ class EmailNotifier:
                     # Cap optimal_stock để tránh giá trị quá cao do outliers
                     optimal_stock = min(optimal_stock, 5000)
                     
-                    # Suggested order = dự báo 14 ngày (2 tuần) - tồn hiện tại (ước tính từ last_week)
-                    estimated_current_stock = last_week_sales  # Ước tính tồn hiện tại = bán tuần trước
-                    suggested_order = max(0, round(forecast_next_week * 2) - estimated_current_stock)  # 2 weeks = 14 days
+                    # Suggested order = dự báo 14 ngày * 1.5 - bán tuần trước
+                    # Unified formula: forecast * 1.5 - last_week (ton_kho not available in email context)
+                    suggested_order = max(0, round(forecast_next_week * 1.5 - last_week_sales))
                 
                 product_data.append({
                     'code': product_code,

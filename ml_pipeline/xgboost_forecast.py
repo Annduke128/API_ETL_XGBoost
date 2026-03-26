@@ -2230,7 +2230,7 @@ class SalesForecaster:
                         'abc_class': 'first'
                     }).reset_index()
                     product_summary['suggested_order'] = (
-                        product_summary['predicted_quantity'] * 2 - product_summary['last_week_sales']
+                        product_summary['predicted_quantity'] * 1.5 - product_summary['last_week_sales'] - product_summary['ton_kho_nho_nhat']
                     ).clip(lower=0).round()
                     
                     # Merge suggested_order vào forecasts
@@ -3586,6 +3586,8 @@ class SalesForecaster:
                 # Tính toán khuyến nghị cho top 10 sản phẩm có dự báo cao nhất
                 top_products = forecasts.groupby('ma_hang').agg({
                     'predicted_quantity': 'sum',
+                    'last_week_sales': 'first',
+                    'ton_kho_nho_nhat': 'first',
                     'ten_san_pham': 'first',
                     'nhom_hang_cap_1': 'first'
                 }).sort_values('predicted_quantity', ascending=False).head(10)
@@ -3596,6 +3598,8 @@ class SalesForecaster:
                 for idx, (product, row) in enumerate(top_products.iterrows(), 1):
                     try:
                         qty = row['predicted_quantity']
+                        last_week = row.get('last_week_sales', 0)
+                        ton_kho = row.get('ton_kho_nho_nhat', 0)
                         cat = row['nhom_hang_cap_1']
                         name = row.get('ten_san_pham', 'N/A')[:30]  # Giới hạn 30 ký tự
                         
@@ -3612,7 +3616,8 @@ class SalesForecaster:
                         safety_stock = max(0, round(safety_stock))
                         
                         reorder_point = round(avg_daily * 14)  # 2 weeks
-                        suggested_order = round(avg_daily * 14)  # 14 days = 2 weeks
+                        # Unified formula: forecast_14_days * 1.5 - last_week - stock
+                        suggested_order = max(0, round(qty * 1.5 - last_week - ton_kho))
                         urgency = 'HIGH' if qty > avg_daily * 14 else 'NORMAL'
                         
                         rec = {
