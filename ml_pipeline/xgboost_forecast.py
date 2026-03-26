@@ -1771,12 +1771,25 @@ class SalesForecaster:
             # COLD START HANDLING: 
             # 1. Nếu ít hơn 2 ngày dữ liệu
             # 2. Hoặc ít hơn 7 ngày và tất cả đều có cùng giá trị (dữ liệu đồng nhất bất thường - có thể là outliers)
+            # 3. Hoặc dữ liệu quá thưa (sparse): < 5% ngày có dữ liệu trong toàn bộ khoảng thờ i gian
             is_uniform_outlier = (len(product_history) < 7 and product_history['daily_quantity'].nunique() == 1)
-            if len(product_history) < 2 or is_uniform_outlier:
+            
+            # Tính sparsity: tỷ lệ ngày có dữ liệu / tổng ngày trong range
+            if len(product_history) >= 2:
+                date_range_days = (product_history['ngay'].max() - product_history['ngay'].min()).days + 1
+                data_sparsity = len(product_history) / date_range_days if date_range_days > 0 else 1.0
+                is_sparse_data = data_sparsity < 0.05 and len(product_history) < 10  # < 5% và < 10 ngày
+            else:
+                is_sparse_data = False
+            
+            if len(product_history) < 2 or is_uniform_outlier or is_sparse_data:
                 if is_uniform_outlier:
                     logger.warning(f"   ⚠️ Uniform outlier detected: {product} has {len(product_history)} days with same value {product_history['daily_quantity'].iloc[0]}. Using capped category median.")
                     # Cap category median cho uniform outliers để tránh giá trị quá cao
                     cat_median = min(category_stats_dict.get(cat1, 10), 50)  # Max 50 cho uniform outliers
+                elif is_sparse_data:
+                    logger.warning(f"   ⚠️ Sparse data detected: {product} has only {len(product_history)} days in {date_range_days} days range ({data_sparsity*100:.1f}% sparsity). Using category median.")
+                    cat_median = category_stats_dict.get(cat1, 10)  # Default 10 nếu không tìm thấy category
                 else:
                     cat_median = category_stats_dict.get(cat1, 10)  # Default 10 nếu không tìm thấy category
                 cold_start_products.append({
